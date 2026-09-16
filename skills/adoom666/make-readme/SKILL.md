@@ -1,6 +1,6 @@
 ---
 name: make-readme
-description: Generate or update a comprehensive README.md based on deep codebase analysis
+description: Generate or update a comprehensive README.md based on deep codebase analysis. Use when the user says "/make-readme", "make a readme", "write a README", "update the README", or asks to document a repository, project or codebase for new developers.
 ---
 
 # makeReadme Skill
