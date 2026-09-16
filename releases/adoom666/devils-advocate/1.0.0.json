@@ -1,0 +1,11 @@
+{
+  "statement": "carnivore-release-v1\nskill\nadoom666\ndevils-advocate\n1.0.0\nAdoom666/CarnivoreAI-Skills\nskills/adoom666/devils-advocate\neb86628ae394f4c241ee72199027ecfe36e4338b\n9ebf5b3273a44f6ea9072d95a04aec44fecee97354cc2a297ead8993e679f94b\n",
+  "sig": {
+    "key_id": "3463B8E83B44738B",
+    "sig": "RUSLc0Q76LhjNEjMnJpc6JsBj2kZMzG8rU7KaS151yTjC/qlIWWfa8/nR7IDAMIoalM166kjHC8peWTH/XUROFJT6AQyDQsdSQQ=",
+    "tc": "timestamp:1789521730\tfile:statement.txt\thashed",
+    "gsig": "6NKH39SfumFqW3lEwLagQ75t70kbFTpy9PvQrVbPEv1cyOcA/Nx4IVrJyKxUhyj3o5g2jJ9DP6m6AWxoVzSVCQ=="
+  },
+  "commit": "eb86628ae394f4c241ee72199027ecfe36e4338b",
+  "digest": "9ebf5b3273a44f6ea9072d95a04aec44fecee97354cc2a297ead8993e679f94b"
+}

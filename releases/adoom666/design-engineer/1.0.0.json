@@ -1,0 +1,11 @@
+{
+  "statement": "carnivore-release-v1\nskill\nadoom666\ndesign-engineer\n1.0.0\nAdoom666/CarnivoreAI-Skills\nskills/adoom666/design-engineer\neb86628ae394f4c241ee72199027ecfe36e4338b\naeaacd1cc67d2f29e7d2aa42ab55d366a5b61c3adc75a23ea9a3c3208fd7476f\n",
+  "sig": {
+    "key_id": "3463B8E83B44738B",
+    "sig": "RUSLc0Q76LhjNFK9FTOqYIs/YjrBh8CQbE8N9pP308MhHj4Kk0UX3eTVNvJALR1rOdmmpUnqqP2YvLMp6J0gUq2LMViV6EFXhQc=",
+    "tc": "timestamp:1789521726\tfile:statement.txt\thashed",
+    "gsig": "/ailJ/5novLFqioaNZhDuH0ktUvC2JbRoY6Nwf/4nFX+aLwU56voAdtFYzhhhwlqUrC9SsweU/hPIhEOj1CeDg=="
+  },
+  "commit": "eb86628ae394f4c241ee72199027ecfe36e4338b",
+  "digest": "aeaacd1cc67d2f29e7d2aa42ab55d366a5b61c3adc75a23ea9a3c3208fd7476f"
+}
