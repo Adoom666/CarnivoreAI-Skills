@@ -201,6 +201,37 @@ def _verified_revocations(
     return block
 
 
+#: THE FIELDS ``_version_entry`` WRITES, DECLARED ONCE SO A DROPPED ONE GOES
+#: RED. A version entry is a published wire shape that every reader of this
+#: index parses, and a field that quietly stops being written is invisible
+#: twice over: absent from the document, and absent from the job log, which
+#: counts items and versions and never looks inside one. It reads to a reader
+#: exactly like a field the catalog never carried. So the set is declared
+#: here, beside the function that writes it, and ``tests/test_builder.py``
+#: holds an assembled entry to EXACTLY this set: adding a field means
+#: declaring it, and removing one means deciding to, rather than finding out
+#: from a published document.
+ASSEMBLED_VERSION_FIELDS = frozenset({
+    "v",
+    "src",
+    "digest",
+    "size",
+    "files",
+    "scripts",
+    "published_at",
+    "sig",
+    "grade",
+})
+
+#: What a PUBLISHED entry carries. ``review`` is the one field this module
+#: does not write: the review step fills it in afterwards, and it does so by
+#: MUTATING the entry rather than rebuilding it, which is what lets the grade
+#: and the review coexist. A review step that rebuilt the entry would publish
+#: a review and drop everything assembled beside it, so the drift test walks
+#: the real review command and holds its output to this set.
+PUBLISHED_VERSION_FIELDS = ASSEMBLED_VERSION_FIELDS | {"review"}
+
+
 def _version_entry(
     release: VerifiedRelease, repo_slug: str, review: Optional[Dict[str, object]],
 ) -> Dict[str, object]:
@@ -214,6 +245,10 @@ def _version_entry(
     The review is attached here rather than built here: this job assembles
     an unreviewed index first and the review step fills it in afterwards,
     which is what keeps the review strictly after the publisher signature.
+
+    EVERY FIELD THIS WRITES IS DECLARED IN ``ASSEMBLED_VERSION_FIELDS``
+    above. Add one here and add it there in the same change, or the drift
+    test says so.
 
     THE GRADE IS ALREADY DECIDED by the time this runs. It was taken in the
     verification worktree, over the bytes at this version's own commit, so

@@ -17,7 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from index_builder.assemble import assemble, write_index
+from index_builder.assemble import (
+    ASSEMBLED_VERSION_FIELDS,
+    PUBLISHED_VERSION_FIELDS,
+    assemble,
+    write_index,
+)
 from index_builder.config import load_config
 from index_builder.gate import gate_report
 from index_builder.publishers import load_index_key, load_publishers
@@ -517,3 +522,115 @@ def test_the_review_command_refuses_half_a_request(tmp_path: Path) -> None:
         "--handle", HANDLE, "--name", SKILL, "--version", "1.0.0",
         "--index", str(tmp_path / "i.json"), "--out", str(tmp_path / "o.json"),
     ]) == 1
+
+
+@requires_minisign
+def test_an_assembled_version_entry_carries_every_declared_field(
+    catalog: dict,
+) -> None:
+    """The drift test: an assembled entry is EXACTLY the declared wire shape.
+
+    WHY THIS IS AN EQUALITY AND NOT A LIST OF ASSERTIONS. The happy path
+    test above names six things it cares about, which is the shape of check
+    that let a field go missing without anything going red: it only ever
+    looks at what its author remembered to look at. This one is driven off
+    ``ASSEMBLED_VERSION_FIELDS``, so a field is covered by BEING DECLARED
+    and nothing else. Drop one from ``_version_entry`` and this goes red
+    naming it; add one without declaring it and this goes red too, because
+    an undeclared field in a published document is a wire shape nobody
+    wrote down.
+    """
+    root = catalog["root"]
+    publishers = load_publishers(root)
+    releases = [
+        verify_release(root, path, publishers=publishers, repo_slug=SLUG)
+        for path in find_release_files(root)
+    ]
+    built = assemble(
+        root, publishers=publishers, releases=releases, repo_slug=SLUG,
+        serial=1, generated_at="2026-09-15T00:00:00Z",
+    )
+    entry = built.document["items"][0]["versions"][0]
+
+    missing = set(ASSEMBLED_VERSION_FIELDS) - set(entry)
+    assert not missing, (
+        f"the assembled version entry is missing {sorted(missing)}. a field "
+        f"that stops being written disappears from every index this catalog "
+        f"publishes, and nothing else in this build looks inside an entry"
+    )
+    extra = set(entry) - set(ASSEMBLED_VERSION_FIELDS)
+    assert not extra, (
+        f"the assembled version entry carries {sorted(extra)}, which "
+        f"ASSEMBLED_VERSION_FIELDS does not declare. declare it there in the "
+        f"same change, so the published wire shape is written down once"
+    )
+    assert entry["grade"]["grade"], "the grade block carries no letter"
+
+
+@requires_minisign
+def test_a_published_version_entry_keeps_its_grade_when_the_review_lands(
+    catalog: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The grade and the review coexist, proven through the REAL review command.
+
+    THE TWO FIELDS ARE WRITTEN BY DIFFERENT STEPS, which is the whole risk.
+    ``assemble`` writes the grade and the review step writes the review, so
+    a review step that rebuilt an entry instead of mutating it would publish
+    a review and silently take the grade with it. Nothing downstream would
+    notice: the index still parses, the job log still counts six versions,
+    and the signature still verifies over the smaller document. So this runs
+    the real command over a real assembled index and holds the result to
+    ``PUBLISHED_VERSION_FIELDS``.
+    """
+    from index_builder import __main__ as cli
+
+    root = catalog["root"]
+    publishers = load_publishers(root)
+    releases = [
+        verify_release(root, path, publishers=publishers, repo_slug=SLUG)
+        for path in find_release_files(root)
+    ]
+    built = assemble(
+        root, publishers=publishers, releases=releases, repo_slug=SLUG,
+        serial=1, generated_at="2026-09-15T00:00:00Z",
+    )
+    unsigned = tmp_path / "index.unsigned.json"
+    published = tmp_path / "index.json"
+    write_index(built.document, unsigned)
+    assembled_grade = built.document["items"][0]["versions"][0]["grade"]
+
+    def fake_review_one(body: str, settings: object, *, now: str) -> dict:
+        """Stand in for the model, so this test makes no network call."""
+        return {
+            "status": "reviewed",
+            "summary": "reads the repository and says what is free.",
+            "warnings": [],
+            "model": "test/model",
+            "reviewed_at": now,
+        }
+
+    monkeypatch.setattr(cli, "review_one", fake_review_one, raising=True)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+
+    assert cli.main([
+        "--repo-root", str(root), "review",
+        "--index", str(unsigned), "--out", str(published),
+    ]) == 0
+
+    entry = json.loads(published.read_text(encoding="utf-8"))["items"][0]["versions"][0]
+
+    missing = set(PUBLISHED_VERSION_FIELDS) - set(entry)
+    assert not missing, (
+        f"the published version entry is missing {sorted(missing)}. the "
+        f"review step rewrites this entry, so a field it fails to carry "
+        f"forward is one the catalog stops publishing"
+    )
+    extra = set(entry) - set(PUBLISHED_VERSION_FIELDS)
+    assert not extra, (
+        f"the published version entry carries {sorted(extra)}, which "
+        f"PUBLISHED_VERSION_FIELDS does not declare"
+    )
+    assert entry["review"]["status"] == "reviewed"
+    assert entry["grade"] == assembled_grade, (
+        "the review step changed the grade it was supposed to carry through"
+    )
