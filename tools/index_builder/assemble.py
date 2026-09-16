@@ -39,7 +39,7 @@ from .releases import (
     ReleaseRefused,
     VerifiedRelease,
 )
-from .statements import revoke_statement, version_subject
+from .statements import revoke_statement
 
 #: The wire value of the index's ``schema`` field.
 SCHEMA = "carnivore.catalog.index/1"

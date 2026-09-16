@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Sequence, Set, Tuple
+from typing import List, Sequence, Set, Tuple
 
 from .releases import RELEASES_DIR, SKILLS_DIR
 

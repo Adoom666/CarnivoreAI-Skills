@@ -261,8 +261,12 @@ def _walk_members(root: Path, commit: str, skill_path: str) -> List[tuple]:
         fields = meta.split()
         if len(fields) < 3 or fields[1] != "blob":
             continue
-        mode = "100755" if fields[0] == "100755" else "100644"
-        members.append((path[len(skill_path) + 1:], mode))
+        # a symlink is a blob too, at mode 120000, and the digest does not
+        # cover one. showing a reviewer a file the digest excludes would be
+        # reviewing bytes nobody signed.
+        if fields[0] not in ("100644", "100755"):
+            continue
+        members.append((path[len(skill_path) + 1:], fields[0]))
     return members
 
 
