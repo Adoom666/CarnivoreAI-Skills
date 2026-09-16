@@ -32,6 +32,7 @@ import pytest
 from index_builder.statements import (
     SKILL_NAME_RE,
     VERSION_RE,
+    match_or_raise,
     release_statement,
 )
 
@@ -159,3 +160,35 @@ def test_the_version_separator_comment_is_now_true() -> None:
     from index_builder.statements import VERSION_SUBJECT_SEPARATOR
 
     assert not VERSION_RE.match(f"1.0.0{VERSION_SUBJECT_SEPARATOR}2.0.0")
+
+
+@pytest.mark.parametrize(
+    "value,pattern",
+    [("sme\n", SKILL_NAME_RE), ("1.0.0\n", VERSION_RE)],
+)
+def test_a_trailing_newline_is_refused_by_fullmatch_not_match(
+    value: str, pattern: "re.Pattern[str]"
+) -> None:
+    """``match_or_raise`` must use ``fullmatch``, not ``match``.
+
+    ``match`` anchors only the start of the string; ``$`` in the pattern
+    matches either the end of the string OR just before one trailing
+    newline, so ``re.match`` lets a name or version carrying a trailing
+    newline slip through where ``re.fullmatch`` catches it. This is the
+    same hole the product repo's own ``_match_or_raise`` closed by using
+    ``fullmatch``, and the same hole a reviewer had to close by hand
+    inside :func:`index_builder.marketplace.plugin_entry`. Nothing
+    downstream exploits it today only because both statement renderers
+    pre-filter line breaks before a value reaches this helper.
+
+    The negative control is ``pattern.match(value)`` below: it proves the
+    OLD method (``match``) would have accepted a smuggled newline, so the
+    refusal from ``match_or_raise`` beside it is demonstrably because of
+    the method, not because the shape was already illegal.
+    """
+    assert pattern.match(value), (
+        f"negative control failed: re.match did not accept {value!r}"
+    )
+    assert not pattern.fullmatch(value)
+    with pytest.raises(ValueError):
+        match_or_raise(value, pattern, "value")
