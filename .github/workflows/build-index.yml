@@ -93,7 +93,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: install the builder's dependencies
-        run: python -m pip install --require-hashes=false -r tools/requirements.txt
+        run: python -m pip install -r tools/requirements.txt
 
       - name: prove the digest implementation against the shared vectors
         # the product repo runs the same vectors against its own digest code.
