@@ -30,6 +30,10 @@ class _KwLogger:
     """
 
     def __init__(self, name: str) -> None:
+        """Wrap the stdlib logger for one module.
+
+        :param name: the module name the records are attributed to.
+        """
         self._log = logging.getLogger(name)
 
     def warning(self, event: str, **context: object) -> None:

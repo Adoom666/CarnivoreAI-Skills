@@ -68,6 +68,16 @@ def load_config(repo_root: Path) -> CatalogConfig:
         raise ValueError(f"{CONFIG_FILENAME} must be a mapping")
 
     def integer(key: str, minimum: int) -> int:
+        """One settings value that must be a whole number at or above a floor.
+
+        :param key: the key in catalog.yml.
+        :param minimum: the smallest value that means anything.
+        :returns: the value.
+        :raises ValueError: when it is absent, not an integer, or below
+            the floor. ``bool`` is excluded explicitly because it is a
+            subclass of ``int`` in Python, so ``True`` would otherwise
+            read as the serial 1.
+        """
         value = raw.get(key)
         if not isinstance(value, int) or isinstance(value, bool):
             raise ValueError(f"{CONFIG_FILENAME}: {key} must be an integer")

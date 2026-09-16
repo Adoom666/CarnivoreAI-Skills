@@ -27,6 +27,17 @@ verified items, so two builds of the same commit write the same bytes, which
 is what lets the build job tell a stale committed file from a fresh one. A
 `generated_at` here would make every rebuild look like a change.
 
+WHAT INSTALLING THROUGH THIS FILE DOES AND DOES NOT GET YOU. `claude
+plugin install` copies the skill folder as it stands on `main` at the
+moment it runs; it does not read a release statement and it cannot be made
+to. The minisign chain in this repository covers `v1/index.json`, which is
+the CATALOG INDEX, and it does not cover the copy the CLI made: no
+signature artifact is written into the plugin cache and nothing there is
+checked. A user who wants the bytes a publisher actually signed installs
+through the app's catalog screen, which verifies the index against a
+pinned key and checks the folder digest before it stages anything. Both
+paths are real and neither is oversold here.
+
 A NAME COLLISION IS REFUSED, NEVER RENAMED. A marketplace namespace is flat:
 `sme@carnivore` names one plugin. Two publishers shipping a skill of the same
 name cannot both have it. Renaming the older one to settle the clash would
@@ -42,6 +53,7 @@ from typing import Dict, List, Optional, Sequence
 
 from .publishers import PublisherRecord
 from .releases import SKILLS_DIR
+from .statements import PUBLISHER_RE, SKILL_NAME_RE, match_or_raise
 
 #: Where the CLI looks, relative to the root of the repository it was given.
 MARKETPLACE_PATH = ".claude-plugin/marketplace.json"
@@ -116,7 +128,9 @@ def plugin_entry(
       publishers (dict) - every declared publisher, by handle.
     Output: dict - one plugin entry.
     Raises: MarketplaceRefused when the item is missing a field it cannot
-      be rendered without, or names a publisher that is not declared.
+      be rendered without, when its publisher or name fails the shape that
+      makes it safe to compose into a path, or when it names a publisher
+      that is not declared.
     Example: plugin_entry(item, publishers=records)["source"]
       -> "./skills/adoom666/sme"
     """
@@ -135,6 +149,31 @@ def plugin_entry(
     brief = card.get("brief")
     if not isinstance(brief, str) or not brief:
         raise MarketplaceRefused(f"item {item.get('id')!r} carries no card brief")
+
+    # `source` is composed into a path under the marketplace root two
+    # lines below, so BOTH HALVES ARE HELD TO THEIR OWN SHAPE HERE rather
+    # than trusted to have been checked upstream. They are checked
+    # upstream today, in a different module reached by a different call
+    # path, which is one refactor away from not being reached at all. A
+    # boundary that composes a path re-asserts its own grammar or it is
+    # not a boundary. The line break check comes first because the `$`
+    # anchor in both patterns matches BEFORE a trailing newline, so
+    # "sme\n" would otherwise pass a shape it does not have.
+    for field_name, value in (("publisher", handle), ("name", name)):
+        if "\n" in value or "\r" in value:
+            raise MarketplaceRefused(
+                f"item {item.get('id')!r} carries a line break in its "
+                f"{field_name}, which cannot be part of a path or a plugin name"
+            )
+    try:
+        match_or_raise(handle, PUBLISHER_RE, "publisher")
+        match_or_raise(name, SKILL_NAME_RE, "name")
+    except ValueError as exc:
+        raise MarketplaceRefused(
+            f"item {item.get('id')!r} cannot be rendered as a plugin entry "
+            f"because {exc}. the entry composes a path from the publisher "
+            f"and the name, so it refuses rather than emits"
+        ) from exc
 
     record = publishers.get(handle)
     if record is None:
