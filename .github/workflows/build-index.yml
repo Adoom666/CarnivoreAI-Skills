@@ -40,6 +40,9 @@ on:
       - CODEOWNERS
       - skills/**
       - releases/**
+      # a committed review is published INTO the signed index, so a
+      # commit that only adds one has to rebuild it.
+      - reviews/**
       - publishers/**
       - revocations/**
       - catalog.yml
