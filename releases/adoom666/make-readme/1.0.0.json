@@ -1,0 +1,11 @@
+{
+  "statement": "carnivore-release-v1\nskill\nadoom666\nmake-readme\n1.0.0\nAdoom666/CarnivoreAI-Skills\nskills/adoom666/make-readme\neb86628ae394f4c241ee72199027ecfe36e4338b\ndcfd2e1d6cc5d680d655139c315a0969a250aea001be084c5fb2e934566d5121\n",
+  "sig": {
+    "key_id": "3463B8E83B44738B",
+    "sig": "RUSLc0Q76LhjNGfCKPOVVLB6i+9oQ7cu19a3RWj23tgSCItFnRrW6r1Nk6EbmuQ08Cgp8EoHAKFl56SHphWvKFmgE/JAjK+wuQg=",
+    "tc": "timestamp:1789521733\tfile:statement.txt\thashed",
+    "gsig": "Hn73pggCQrkpUUNNgSX8hIcQuQJtgIvigOpOPvpXQge+S3lq8a9W10n7URRQyVvenbRKhc7YBwRnSVXl4cv/AQ=="
+  },
+  "commit": "eb86628ae394f4c241ee72199027ecfe36e4338b",
+  "digest": "dcfd2e1d6cc5d680d655139c315a0969a250aea001be084c5fb2e934566d5121"
+}

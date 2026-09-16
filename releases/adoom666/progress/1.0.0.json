@@ -1,0 +1,11 @@
+{
+  "statement": "carnivore-release-v1\nskill\nadoom666\nprogress\n1.0.0\nAdoom666/CarnivoreAI-Skills\nskills/adoom666/progress\neb86628ae394f4c241ee72199027ecfe36e4338b\nca7b521076845803ac43b6e1582b043fd7ef0678327cac6fbf9e02a55206c45d\n",
+  "sig": {
+    "key_id": "3463B8E83B44738B",
+    "sig": "RUSLc0Q76LhjNNtGfZPZh2jojul+KhgQw2z1Ga4lTCEPahcfDew7Yaras5rFnNXXjo8fc8ZQXQMTE+vNIhcuQNmkZ739lSgTlQQ=",
+    "tc": "timestamp:1789521736\tfile:statement.txt\thashed",
+    "gsig": "pchmDg3IyBxi+XfsDui4Xnm474CfHPe8p6L0inIkAYxA0KI6EB8X1AwDMwpMTN7l7NGyk1Z8wodh22wzGGZvDw=="
+  },
+  "commit": "eb86628ae394f4c241ee72199027ecfe36e4338b",
+  "digest": "ca7b521076845803ac43b6e1582b043fd7ef0678327cac6fbf9e02a55206c45d"
+}
