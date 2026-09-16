@@ -1,0 +1,101 @@
+{
+  "schema": "carnivore.catalog.digest-vectors/1",
+  "domain": "carnivore-skill-digest-v1\n",
+  "note": "Shared byte for byte between the product repo and the public catalog repo. A test in each repo reproduces every vector with that repo's own implementation, so the two digest implementations cannot drift without failing a build on both sides.",
+  "vectors": [
+    {
+      "name": "empty-folder",
+      "description": "a folder with no regular files at all: the digest is the domain prefix alone",
+      "entries": [],
+      "render_b64": "",
+      "digest": "f785dbece1a874529c0b1b28ec6ba7942ada8247428307283a26d96762b9b88f"
+    },
+    {
+      "name": "one-file",
+      "description": "the smallest real skill: a single non executable SKILL.md",
+      "entries": [
+        {
+          "relpath": "SKILL.md",
+          "mode": "100644",
+          "sha256": "bf35993947cbd787603e8e34c0950c7817f46eb37e703b6630e821ac1b60f8fa"
+        }
+      ],
+      "render_b64": "MTAwNjQ0AFNLSUxMLm1kAGJmMzU5OTM5NDdjYmQ3ODc2MDNlOGUzNGMwOTUwYzc4MTdmNDZlYjM3ZTcwM2I2NjMwZTgyMWFjMWI2MGY4ZmEK",
+      "digest": "bebe19c4a2bbb17535ca318cfc65af91f3920dd0db766ddc276a6b6a39a66aae"
+    },
+    {
+      "name": "exec-bit",
+      "description": "the owner execute bit flips the mode field to 100755 and nothing else",
+      "entries": [
+        {
+          "relpath": "SKILL.md",
+          "mode": "100644",
+          "sha256": "bf35993947cbd787603e8e34c0950c7817f46eb37e703b6630e821ac1b60f8fa"
+        },
+        {
+          "relpath": "scripts/run.sh",
+          "mode": "100755",
+          "sha256": "299001868fb8c02fd431c336c6d058f5558c5dff5b5af5e6fe04b870a6a9cbba"
+        }
+      ],
+      "render_b64": "MTAwNjQ0AFNLSUxMLm1kAGJmMzU5OTM5NDdjYmQ3ODc2MDNlOGUzNGMwOTUwYzc4MTdmNDZlYjM3ZTcwM2I2NjMwZTgyMWFjMWI2MGY4ZmEKMTAwNzU1AHNjcmlwdHMvcnVuLnNoADI5OTAwMTg2OGZiOGMwMmZkNDMxYzMzNmM2ZDA1OGY1NTU4YzVkZmY1YjVhZjVlNmZlMDRiODcwYTZhOWNiYmEK",
+      "digest": "f0fbdaff3154bad40dbea4e58246241c410894bb290800bd592c06c0b343489b"
+    },
+    {
+      "name": "utf8-ordering",
+      "description": "sorting is by UTF-8 bytes, so Z sorts before a and any two byte name sorts after every ASCII name",
+      "entries": [
+        {
+          "relpath": "Zebra.md",
+          "mode": "100644",
+          "sha256": "c865f6c5ab8d1b0bcd383a5e1e3879d22681c96bf462c269b7581d523fbe70ab"
+        },
+        {
+          "relpath": "apple.md",
+          "mode": "100644",
+          "sha256": "87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7"
+        },
+        {
+          "relpath": "éclair.md",
+          "mode": "100644",
+          "sha256": "a2bbdb2de53523b8099b37013f251546f3d65dbe7a0774fa41af0a4176992fd4"
+        },
+        {
+          "relpath": "SKILL.md",
+          "mode": "100644",
+          "sha256": "cbc80bb5c0c0f8944bf73b3a429505ac5cde16644978bc9a1e74c5755f8ca556"
+        }
+      ],
+      "render_b64": "MTAwNjQ0AFNLSUxMLm1kAGNiYzgwYmI1YzBjMGY4OTQ0YmY3M2IzYTQyOTUwNWFjNWNkZTE2NjQ0OTc4YmM5YTFlNzRjNTc1NWY4Y2E1NTYKMTAwNjQ0AFplYnJhLm1kAGM4NjVmNmM1YWI4ZDFiMGJjZDM4M2E1ZTFlMzg3OWQyMjY4MWM5NmJmNDYyYzI2OWI3NTgxZDUyM2ZiZTcwYWIKMTAwNjQ0AGFwcGxlLm1kADg3NDI4ZmM1MjI4MDNkMzEwNjVlN2JjZTNjZjAzZmU0NzUwOTY2MzFlNWUwN2JiZDdhMGZkZTYwYzRjZjI1YzcKMTAwNjQ0AMOpY2xhaXIubWQAYTJiYmRiMmRlNTM1MjNiODA5OWIzNzAxM2YyNTE1NDZmM2Q2NWRiZTdhMDc3NGZhNDFhZjBhNDE3Njk5MmZkNAo=",
+      "digest": "b9b17f28bebfb5be56e9ced912b2b7d26c4fbfb19b80f2b5183b1a2b0395be56"
+    },
+    {
+      "name": "dotted-names",
+      "description": "names carrying dots, dashes and underscores, none of which may be read as a field boundary",
+      "entries": [
+        {
+          "relpath": "SKILL.md",
+          "mode": "100644",
+          "sha256": "cbc80bb5c0c0f8944bf73b3a429505ac5cde16644978bc9a1e74c5755f8ca556"
+        },
+        {
+          "relpath": ".skillignore",
+          "mode": "100644",
+          "sha256": "16d30e4462189fb14dd611bdb708c510630c576a1f35b9383e89a4352da36c97"
+        },
+        {
+          "relpath": "reference/a.b.c.md",
+          "mode": "100644",
+          "sha256": "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb"
+        },
+        {
+          "relpath": "reference/a-b_c.md",
+          "mode": "100644",
+          "sha256": "8eeb65f074f4e7e89bac6d4dc6e6ade8c46376d65dd4e6b1ac22181d363dd033"
+        }
+      ],
+      "render_b64": "MTAwNjQ0AC5za2lsbGlnbm9yZQAxNmQzMGU0NDYyMTg5ZmIxNGRkNjExYmRiNzA4YzUxMDYzMGM1NzZhMWYzNWI5MzgzZTg5YTQzNTJkYTM2Yzk3CjEwMDY0NABTS0lMTC5tZABjYmM4MGJiNWMwYzBmODk0NGJmNzNiM2E0Mjk1MDVhYzVjZGUxNjY0NDk3OGJjOWExZTc0YzU3NTVmOGNhNTU2CjEwMDY0NAByZWZlcmVuY2UvYS1iX2MubWQAOGVlYjY1ZjA3NGY0ZTdlODliYWM2ZDRkYzZlNmFkZThjNDYzNzZkNjVkZDRlNmIxYWMyMjE4MWQzNjNkZDAzMwoxMDA2NDQAcmVmZXJlbmNlL2EuYi5jLm1kAGVkZWFhZmYzZjE3NzRhZDI4ODg2NzM3NzBjNmQ2NDA5N2UzOTFiYzM2MmQ3ZDZmYjM0OTgyZGRmMGVmZDE4Y2IK",
+      "digest": "1bb521e17d8badbbcb3daa73e548230d0c93f11c4295fadbf62474eec72f2b48"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+# pinned exactly, because this is what verifies signatures in a job that
+# publishes signed bytes. cryptography is the same version the product repo
+# pins, so the two verifiers are the same code on the same library.
+cryptography==48.0.0
+PyYAML==6.0.3
+pytest==8.4.2

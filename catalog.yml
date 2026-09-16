@@ -1,0 +1,35 @@
+# the settings the build job is allowed to read.
+#
+# every value here changes what gets PUBLISHED, so it lives in a reviewed
+# commit under CODEOWNERS rather than in a repository setting one account can
+# change without a pull request. the repository variables hold only the
+# addresses of things (the aws role, the region, the amplify app), never what
+# goes in them.
+
+# the owner/repo every release statement signs. read from here rather than
+# from GITHUB_REPOSITORY because it is part of signed bytes: taken from the
+# environment, a fork's build would mint statements that verify for a
+# repository nobody publishes.
+repo: Adoom666/CarnivoreAI-Skills
+
+# the floor for the very first published index. only ever used when no live
+# index exists to count from; it can never lower a live serial.
+min_serial: 1
+
+# how old an index may be before the app shows it as degraded. the app holds
+# its own copy of this number; this one is here so a human can compare them.
+staleness_days: 30
+
+# the openrouter model the publish time security review calls.
+# google/gemini-2.5-flash-lite: 0.10 usd per million input tokens and 0.40 per
+# million output, with a one million token context, so a forty thousand
+# character review costs well under a hundredth of a cent. chosen over
+# openai/gpt-5-nano at the same input price because the larger context means a
+# long skill is never silently cut, and over openai/gpt-4.1-mini, which is four
+# times the input price for a job this small.
+review_model: google/gemini-2.5-flash-lite
+
+# how much skill text one review call is shown. the reviewer is told, in the
+# text itself, when the cap bit, so it never reports that files it was not
+# shown are fine.
+review_max_chars: 40000

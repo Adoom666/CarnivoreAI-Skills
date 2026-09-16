@@ -1,0 +1,23 @@
+# response headers for the hosted catalog.
+#
+# these are IDENTICAL to the custom headers already configured on the amplify
+# app. this file overrides the app level configuration for a manual deployment,
+# so the two are kept the same on purpose: a deployment that silently changed a
+# cache header would show up as clients holding a stale index for a day.
+#
+# five minutes of caching with must-revalidate is the whole freshness story.
+# the index is small, it changes when somebody publishes, and a client that
+# refuses to revalidate would keep serving a version after it was revoked.
+customHeaders:
+  - pattern: /v1/*
+    headers:
+      - key: Cache-Control
+        value: public, max-age=300, must-revalidate
+      - key: X-Content-Type-Options
+        value: nosniff
+  - pattern: '**'
+    headers:
+      - key: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - key: X-Content-Type-Options
+        value: nosniff
