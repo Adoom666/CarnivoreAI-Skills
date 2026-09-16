@@ -142,3 +142,81 @@ def test_the_weekly_resign_is_scheduled() -> None:
     """The re-sign bounds an undetected key compromise to a week."""
     triggers = _triggers(_document())
     assert triggers["schedule"], "there is no weekly re-sign"
+
+
+#: The ownership file, beside the workflow, checked for the same reason.
+CODEOWNERS = REPO_ROOT / "CODEOWNERS"
+
+#: The generated file `claude plugin marketplace add` reads. It decides,
+#: for every plugin name, which folder's bytes a user installs.
+GENERATED_MARKETPLACE = ".claude-plugin"
+
+
+def _codeowner_paths() -> list[str]:
+    """Every path pattern CODEOWNERS assigns an owner to.
+
+    :returns: the left hand column, comments and blank lines dropped.
+
+    Example: _codeowner_paths() contains "tools/**"
+    """
+    assert CODEOWNERS.is_file(), f"{CODEOWNERS} is missing"
+    out = []
+    for line in CODEOWNERS.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        out.append(stripped.split()[0])
+    assert out, "CODEOWNERS assigns no owner to anything, so this proved nothing"
+    return out
+
+
+def test_the_generated_marketplace_file_is_in_the_push_paths_filter() -> None:
+    """A change to it must run this workflow, or the staleness check is mute.
+
+    The check itself works: it regenerates the file from the releases it
+    just proved and compares byte for byte, and it goes red on exactly the
+    edit that matters. It simply never fired for this path on a push,
+    because the filter did not name it. A commit touching only
+    `.claude-plugin/marketplace.json` therefore ran no workflow at all,
+    which is the one file that decides, per plugin name, whose folder a
+    `claude plugin install` copies.
+    """
+    triggers = _triggers(_document())
+    paths = triggers["push"]["paths"]
+    assert any(pattern.startswith(GENERATED_MARKETPLACE) for pattern in paths), (
+        f"no push path filter covers {GENERATED_MARKETPLACE}/, so a commit "
+        f"that repoints a plugin name at another publisher's folder runs "
+        f"nothing at all. filter is: {paths}"
+    )
+
+
+def test_the_generated_marketplace_file_needs_an_owner_review() -> None:
+    """CODEOWNERS covers it, for the same reason the workflow filter does.
+
+    Its own header says everything that decides what gets signed needs the
+    owner on the pull request. This file decides what gets INSTALLED,
+    which is the same question one layer out.
+    """
+    patterns = _codeowner_paths()
+    assert any(pattern.startswith(GENERATED_MARKETPLACE) for pattern in patterns), (
+        f"CODEOWNERS does not cover {GENERATED_MARKETPLACE}/, so a change to "
+        f"the file that maps a plugin name to a folder needs no owner "
+        f"review. it covers: {patterns}"
+    )
+
+
+def test_every_codeowned_path_also_triggers_the_build() -> None:
+    """The two lists answer one question and must not drift apart.
+
+    A path worth an owner's review is a path worth running the checks on.
+    This is the test that would have caught the original gap in either
+    file rather than only in the one that was noticed.
+    """
+    triggers = _triggers(_document())
+    paths = triggers["push"]["paths"]
+    for pattern in _codeowner_paths():
+        stem = pattern.split("*")[0].rstrip("/")
+        assert any(candidate.startswith(stem) for candidate in paths), (
+            f"CODEOWNERS guards {pattern} but no push path filter covers it, "
+            f"so a change there is reviewed but never checked"
+        )

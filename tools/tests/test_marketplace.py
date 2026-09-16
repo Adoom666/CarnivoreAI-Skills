@@ -34,6 +34,7 @@ from index_builder.marketplace import (
     MarketplaceRefused,
     build_marketplace,
     owner_login,
+    plugin_entry,
     render,
     staleness,
     write_marketplace,
@@ -281,3 +282,132 @@ def test_a_skill_with_no_verified_release_never_reaches_the_marketplace(
     assert "unreleased" not in names
     assert names == ["work"]
     assert document["plugins"][0]["source"] == "./skills/adoom666/work"
+
+
+# ---------------------------------------------------------------------------
+# the entry composes a path, so it re-asserts the shapes itself
+# ---------------------------------------------------------------------------
+#
+# `plugin_entry` built `source` as f"./{SKILLS_DIR}/{handle}/{name}" and
+# validated neither half. Production was saved only by the regexes upstream
+# in `statements.py`, which is a different module, reached by a different
+# call path, and one refactor away from not being reached at all. A boundary
+# that composes a path re-asserts its own grammar or it is not a boundary.
+
+
+@pytest.mark.parametrize(
+    "name,why",
+    [
+        ("../../etc", "traversal out of the skills tree"),
+        ("..", "the parent directory"),
+        ("a/b", "a separator, which makes a deeper path than the one meant"),
+        ("", "empty, which doubles the slash and names the parent folder"),
+        ("sme.", "the trailing dot squat; two keys in a flat namespace"),
+        ("null\x00byte", "a NUL, which truncates a C string consumer"),
+        ("new\nline", "a newline, which is a second line in any line format"),
+        ("Upper", "uppercase; two spellings of one folder on a case fold"),
+        ("a" * 65, "one character over the bound"),
+    ],
+)
+def test_an_item_name_that_is_not_a_legal_name_is_refused(name: str, why: str) -> None:
+    """The entry refuses rather than emits, with the composition as control.
+
+    The negative control is the composition itself: it shows what the old
+    code put in `source` for this value, which is the value verbatim.
+    """
+    composed = f"./skills/{HANDLE}/{name}"
+    assert name in composed, (
+        f"negative control failed: {name!r} did not reach the composed source, "
+        f"so this case never demonstrated the defect it claims to ({why})"
+    )
+    with pytest.raises(MarketplaceRefused):
+        plugin_entry(_item(name), publishers={HANDLE: _publisher()})
+
+
+@pytest.mark.parametrize(
+    "handle,why",
+    [
+        ("../../etc", "traversal through the publisher half"),
+        ("a/b", "a separator"),
+        ("Adoom666", "uppercase; the handle is a folder name"),
+        ("-lead", "a leading hyphen reads as an option flag to any CLI"),
+        ("a" * 40, "one over GitHub's own limit"),
+        ("null\x00byte", "a NUL"),
+    ],
+)
+def test_an_item_publisher_that_is_not_a_legal_handle_is_refused(
+    handle: str, why: str,
+) -> None:
+    """Both halves of the path, not just the one that looked dangerous."""
+    composed = f"./skills/{handle}/sme"
+    assert handle in composed, (
+        f"negative control failed: {handle!r} did not reach the composed "
+        f"source, so this case proved nothing ({why})"
+    )
+    with pytest.raises(MarketplaceRefused):
+        plugin_entry(
+            _item("sme", handle=handle), publishers={handle: _publisher(handle)},
+        )
+
+
+def test_a_legal_entry_still_renders() -> None:
+    """The positive control. A validator that refused everything would
+    pass every case above and publish nothing at all."""
+    entry = plugin_entry(_item("sme"), publishers={HANDLE: _publisher()})
+    assert entry["source"] == "./skills/adoom666/sme"
+    assert entry["name"] == "sme"
+
+
+def test_no_emitted_source_can_ever_climb_out_of_the_skills_tree() -> None:
+    """Swept over the whole document rather than asserted per entry."""
+    document = build_marketplace(
+        [_item("sme"), _item("progress")],
+        repo_slug=SLUG, publishers={HANDLE: _publisher()},
+    )
+    for entry in document["plugins"]:
+        source = str(entry["source"])
+        assert source.startswith("./skills/")
+        assert ".." not in source
+        assert "//" not in source[2:]
+
+
+# ---------------------------------------------------------------------------
+# what a generated file is allowed to carry
+# ---------------------------------------------------------------------------
+#
+# THIS FILE IS DATA, NOT PROSE THIS REPOSITORY WROTE. Every description in
+# it is copied verbatim from a publisher's own SKILL.md, inside a folder
+# whose digest that publisher signed. So the repository's no dash rule,
+# which governs text we author, does not reach it: normalising a character
+# here would be rewriting somebody else's signed words, and the same logic
+# would then demand stripping the emoji, arrows and box drawing that four
+# of the six published skills carry. A control character is the one
+# exception, and it is a different case: it is not a word, it is an
+# instruction to whatever renders the file.
+
+
+def test_a_generated_description_may_carry_a_publisher_s_own_punctuation() -> None:
+    """The exemption, written down where it is enforced rather than claimed."""
+    item = _item("progress")
+    item["card"]["brief"] = "reports progress — with a table → done ✅ here."
+    entry = plugin_entry(item, publishers={HANDLE: _publisher()})
+    assert "—" in str(entry["description"])
+    assert "→" in str(entry["description"])
+
+
+def test_the_committed_generated_file_carries_no_control_character() -> None:
+    """The real file on disk, swept byte by byte.
+
+    A description is flattened by `frontmatter.brief_of`, which strips
+    every C0 control; this is the check that the file which actually ships
+    got that treatment, rather than a check on the function in isolation.
+    """
+    committed = Path(MARKETPLACE_PATH)
+    assert committed.is_file(), f"{MARKETPLACE_PATH} is not committed"
+    text = committed.read_text(encoding="utf-8")
+    offenders = [
+        (index, f"U+{ord(char):04X}")
+        for index, char in enumerate(text)
+        if ord(char) < 0x20 and char != "\n" or ord(char) == 0x7F
+    ]
+    assert not offenders, f"control characters in the shipped file: {offenders[:5]}"

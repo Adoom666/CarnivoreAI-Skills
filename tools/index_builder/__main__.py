@@ -374,6 +374,15 @@ def cmd_sign(args: argparse.Namespace) -> int:
     raw_secret = os.environ.get(SIGNING_SECRET_ENV, "")
 
     def emit(signed: bool) -> None:
+        """Tell the workflow whether anything was actually signed.
+
+        :param signed: True only when a real signature was produced.
+
+        The deploy job gates on this. It is written even when the answer
+        is False, because a step output that is absent and one that says
+        false must never be the same thing to the job reading it: a
+        missing output would leave the gate evaluating an empty string.
+        """
         output = os.environ.get("GITHUB_OUTPUT")
         if output:
             with open(output, "a", encoding="utf-8") as handle:

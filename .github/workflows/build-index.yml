@@ -27,6 +27,17 @@ on:
     branches:
       - main
     paths:
+      # THE GENERATED MARKETPLACE FILE IS IN THIS LIST DELIBERATELY. It is
+      # what `claude plugin marketplace add` reads, and it maps each plugin
+      # name to the folder whose bytes get copied. It was absent here, so a
+      # commit touching only `.claude-plugin/marketplace.json` ran no
+      # workflow at all and could repoint a plugin name at another
+      # publisher's folder unchecked. The staleness check in the verify job
+      # goes red on exactly that edit; it simply never fired for this path.
+      - .claude-plugin/**
+      # CODEOWNERS is checked by tools/tests/test_workflow.py, so an edit
+      # that drops an ownership line has to go red somewhere.
+      - CODEOWNERS
       - skills/**
       - releases/**
       - publishers/**

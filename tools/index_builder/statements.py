@@ -25,8 +25,38 @@ from __future__ import annotations
 
 import re
 
-#: A skill name. Lowercase, starts alphanumeric, 64 characters at most.
-SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+#: A skill name. Lowercase, 1 to 64 characters, and BOTH ENDS MUST BE
+#: ALPHANUMERIC. The leading rule refuses a leading dot, so ``.system``
+#: can never be a name. The TRAILING rule refuses ``sme.``, which the old
+#: pattern accepted: a marketplace namespace is flat and its duplicate
+#: check compares names for equality, so ``sme`` and ``sme.`` are two
+#: different keys, the check never fires, and the two rows are
+#: indistinguishable in a list because a trailing dot reads as the end of
+#: the sentence before it. Measured: a two publisher catalog emitted both
+#: and the live CLI installed the trailing dot source.
+SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
+
+#: A version. Up to four dot separated numeric components of at most nine
+#: digits each, with an optional prerelease suffix that also ends
+#: alphanumeric. The shape is taken from what this repository already
+#: assumes rather than invented: every file under ``releases/`` is named
+#: ``1.0.0.json``.
+#:
+#: IT WAS HELD TO NOTHING AT ALL BEFORE. A version is read from a FILE
+#: STEM (``releases.py``: ``version = path.stem``), so it is attacker
+#: chosen in exactly the way a name is, and ``../../../etc``, four hundred
+#: digits, ``$(id)`` and a whitespace only string were all accepted and
+#: signed. A twenty three digit version rendered raw in the CLI.
+#:
+#: IT ALSO MAKES ``VERSION_SUBJECT_SEPARATOR`` TRUE. That constant is
+#: documented as not legal in a version so the revocation subject
+#: ``<item_id>@<version>`` parses back unambiguously. Nothing enforced it
+#: until this pattern existed, which meant a version could carry an ``@``
+#: and split the subject somewhere else.
+VERSION_RE = re.compile(
+    r"^[0-9]{1,9}(?:\.[0-9]{1,9}){0,3}"
+    r"(?:-[0-9a-z](?:[0-9a-z.-]{0,28}[0-9a-z])?)?$"
+)
 
 #: A publisher handle. The GitHub login shape, 39 characters at most.
 PUBLISHER_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$")
@@ -103,13 +133,15 @@ def release_statement(
       ``repo`` or ``path`` would let one signed statement be read as a
       different statement with different fields, which is the canonical
       form injection this line-oriented format is otherwise wide open to.
-      ``publisher`` and ``name`` are additionally held to their own
-      shapes, because those two become a filesystem path.
+      ``publisher``, ``name`` and ``version`` are additionally held to
+      their own shapes. The first two become a filesystem path; the third
+      is a file stem under ``releases/`` and the half of a revocation
+      subject after the ``@``, so it is attacker chosen the same way.
     Inputs: kind, publisher, name, version, repo, path, commit, digest -
       all str, all keyword only so no call site can transpose two of them.
     Output: bytes - the statement, ready to sign or verify.
     Raises: ValueError on an empty field, a field containing CR or LF, or
-      a publisher or name that fails its shape.
+      a publisher, name or version that fails its shape.
     Example: release_statement(kind="skill", publisher="adoom666",
       name="work", version="1.0.0", repo="Adoom666/CarnivoreAI-Skills",
       path="skills/adoom666/work", commit="a" * 40, digest="b" * 64)
@@ -134,6 +166,7 @@ def release_statement(
             )
     match_or_raise(fields["publisher"], PUBLISHER_RE, "publisher")
     match_or_raise(fields["name"], SKILL_NAME_RE, "name")
+    match_or_raise(fields["version"], VERSION_RE, "version")
 
     lines = [RELEASE_STATEMENT_HEADER, *fields.values()]
     return ("".join(f"{line}\n" for line in lines)).encode("utf-8")

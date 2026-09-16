@@ -98,6 +98,14 @@ def parse_front_matter(skill_md: Path) -> SkillFrontMatter:
         raise ValueError(f"{skill_md}: the front matter has no description")
 
     def optional(key: str) -> Optional[str]:
+        """One front matter string, or None when it is absent or blank.
+
+        :param key: the front matter key.
+        :returns: the stripped value, or None. Blank and absent are the
+            same answer on purpose: a key present but empty states
+            nothing, and writing "" into the index would render as a
+            field the publisher had filled in.
+        """
         value = block.get(key)
         return value.strip() if isinstance(value, str) and value.strip() else None
 
@@ -113,18 +121,41 @@ def parse_front_matter(skill_md: Path) -> SkillFrontMatter:
     )
 
 
+#: Every C0 control and DEL, minus the five ``str.split`` already folds
+#: into a single space. ``" ".join(text.split())`` LOOKS LIKE IT
+#: SANITISES AND DOES NOT: Python's whitespace set is space, tab, CR, LF,
+#: vertical tab and form feed, so ESC, BEL, backspace and NUL passed
+#: straight through and a published description carried an ANSI sequence
+#: into the marketplace file. The consumer stripped it at render time,
+#: which is luck rather than a guarantee.
+#:
+#: THEY ARE DELETED, NOT REPLACED WITH A SPACE, and punctuation is left
+#: alone. A control character is not a word, it is an instruction to
+#: whatever renders the text, so removing one changes nothing the
+#: publisher said. An em dash or an emoji IS a character they meant a
+#: reader to see, and rewriting it would be altering text whose folder
+#: digest that publisher signed.
+_CONTROL_STRIP = {
+    code: None
+    for code in list(range(0x20)) + [0x7F]
+    if chr(code) not in " \t\n\r\v\f"
+}
+
+
 def brief_of(description: str) -> str:
     """Cut a description down to one card line.
 
     Description: takes the text up to the first sentence end when that is
       short enough, otherwise cuts on a word boundary and appends a single
       full stop so the row does not end mid word. Never returns empty,
-      because the caller already refused an empty description.
+      because the caller already refused an empty description. Every C0
+      control and DEL is stripped first (see ``_CONTROL_STRIP``); the
+      publisher's punctuation is left exactly as written.
     Inputs: description (str) - the full front matter description.
     Output: str, at most BRIEF_MAX_CHARS characters.
     Example: brief_of("Does one thing. Then another.") -> "Does one thing."
     """
-    flat = " ".join(description.split())
+    flat = " ".join(description.translate(_CONTROL_STRIP).split())
     head = flat.split(". ")[0].rstrip(".")
     candidate = f"{head}." if head else flat
     if len(candidate) <= BRIEF_MAX_CHARS:

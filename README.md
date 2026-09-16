@@ -84,9 +84,17 @@ else. that matters: a release statement names a folder's digest, so a file
 added inside it would invalidate a signature, and a copy of it in a second
 tree would be free to drift from the bytes that were signed.
 
-this path is a convenience and it is NOT the signed one. the cli clones the
-repository and reads the folder; it does not check a release statement, and
-nothing here can make it. the signature checking installer is the app's own
+this path is a convenience and it is NOT the signed one. **the cli copies the
+skill folder as it stands on `main` at the moment you run it, not the commit a
+publisher signed.** it does not check a release statement, and nothing here can
+make it.
+
+**the signature chain proves the catalog index, not the copy the cli made.**
+minisign covers `v1/index.json` and the detached `.minisig` beside it; no
+signature artifact is written into the plugin cache and nothing there is
+verified afterwards. a user who wants the exact bytes a publisher signed
+installs through the app instead, which checks the index against a pinned key
+and then checks the folder digest before staging anything. the signature checking installer is the app's own
 catalog screen, which verifies the index against a pinned key before it
 stages anything. the same file is served at
 `https://catalog.carnivore.ai/.claude-plugin/marketplace.json` for anyone who
@@ -156,8 +164,35 @@ does not make the bytes harmless. that is the whole reason the install preview
 shows the text and the review, and why an update whose SKILL.md changed needs
 fresh consent.
 
-## still to do, and it is the owner's to do
+## branch protection on `main`
 
-branch protection on `main` is not set by this repository and cannot be. it
-needs to require a pull request, require the `verify` job to pass, and include
-administrators, or `CODEOWNERS` is a suggestion rather than a control.
+`main` requires a pull request, and requires the `verify and assemble` check to
+pass before a merge. force pushes and branch deletion are refused. code owner
+review is required, so `CODEOWNERS` is a control rather than a suggestion for
+anybody who is not the owner.
+
+**administrators are deliberately NOT included.** including them is the
+textbook answer and it is the wrong one here: this is a one person repository,
+so an owner who cannot approve his own pull request and cannot bypass the check
+has no way to land an urgent fix to his own catalog, and the failure mode of
+that is a catalog that cannot be repaired. the owner keeps a way through. every
+other contributor is held to the full set.
+
+what that trades away, said plainly: the protection stops a mistake and stops a
+contributor, and it does not stop a compromise of the owner's own account.
+nothing set at this layer could.
+
+## what a generated file is allowed to carry
+
+`.claude-plugin/marketplace.json` is generated, and every description in it is
+copied verbatim from a publisher's own `SKILL.md`, inside a folder whose digest
+that publisher signed. so **this repository's no dash rule does not reach it.**
+that rule governs prose we write. normalising a character in generated output
+would be rewriting somebody else's signed words, and the same reasoning would
+then demand stripping the emoji, arrows and box drawing that four of the six
+published skills carry in their own descriptions.
+
+control characters are the one exception, and they are a different case: a C0
+control is not a word, it is an instruction to whatever renders the file.
+`frontmatter.brief_of` strips every one of them, and a test asserts the shipped
+file carries none.

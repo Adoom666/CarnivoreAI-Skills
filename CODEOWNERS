@@ -2,6 +2,10 @@
 # needs the owner on the pull request. a skill folder does not: the release
 # statement inside it is signed by its own publisher's key and the build job
 # refuses anything that is not.
+# the generated marketplace file decides, for every plugin name, whose
+# folder a `claude plugin install` copies. that is the same question the
+# signing boundary answers, one layer out, so it gets the same review.
+.claude-plugin/** @Adoom666
 .github/**      @Adoom666
 tools/**        @Adoom666
 publishers/**   @Adoom666
