@@ -95,7 +95,7 @@ def match_or_raise(value: str, pattern: "re.Pattern[str]", what: str) -> str:
 
     Example: match_or_raise("work", SKILL_NAME_RE, "name") -> "work"
     """
-    if not pattern.match(value):
+    if not pattern.fullmatch(value):
         raise ValueError(f"{what} {value!r} does not match {pattern.pattern}")
     return value
 
