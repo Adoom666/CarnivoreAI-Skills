@@ -123,6 +123,31 @@ when the review cannot be obtained, for any reason at all, the index records
 `status: "unavailable"` and no summary. the app renders that literally as "no
 ai review". a blank review must never read as a clean one.
 
+## the grade is advisory too
+
+every version also carries a quality grade of its own text and structure,
+written at publish time beside the review and shown in the verify job's
+summary. it asks a different question from the review: not whether a skill
+does anything damaging, but whether it is built the way the agent skills
+specification says to build one, so an agent can find it, load it and follow
+it.
+
+**a low grade never blocks a publish.** what a publisher ships is the
+publisher's business. nothing in the build refuses a version for its grade,
+and nothing ever should.
+
+every rule the grader applies cites the published requirement or
+recommendation it came from, by url, in the table at the top of
+`tools/index_builder/grade.py`. a rule that cannot be traced to one does not
+exist, and a test fails the build if one appears. where the specification
+asks for a judgement a machine cannot make, the grader either uses a stated
+proxy and says in the note that it is one, or it declines and records the
+rule as not graded. a rule that did not run is never reported as one that
+passed, for the same reason a blank review must never read as a clean one.
+
+a folder with no readable `SKILL.md` grades as `ungraded` rather than as an
+`f`. an `f` is a measurement; that is the absence of one.
+
 ## what signing buys, honestly
 
 signing proves who wrote a skill. it does not prove a skill is safe. a

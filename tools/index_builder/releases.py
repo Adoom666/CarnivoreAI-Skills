@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .digest import DigestEntry, digest_directory
+from .grade import grade_folder
 from .minisign_verify import (
     MinisignFormatError,
     PublicKey,
@@ -97,6 +98,10 @@ class VerifiedRelease:
     - ``statement``: the exact bytes that were signed.
     - ``published_at``: the commit's own committer date, in UTC.
     - ``size``, ``files``, ``scripts``: counts derived from the entries.
+    - ``grade``: the advisory quality grade of the folder AT THAT COMMIT,
+      taken in the same worktree the digest was taken in, so it describes
+      the exact bytes the statement signed. It is REPORTING ONLY: nothing
+      in this module reads it and no grade can refuse a release.
     """
 
     handle: str
@@ -111,6 +116,7 @@ class VerifiedRelease:
     size: int
     files: int
     scripts: int
+    grade: Dict[str, object]
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -227,8 +233,8 @@ def _key_for(
 
 def _checked_out_digest(
     repo_root: Path, commit: str, relpath: str, where: str,
-) -> Tuple[str, Tuple[DigestEntry, ...]]:
-    """Re-digest a skill folder as it stood at one commit.
+) -> Tuple[str, Tuple[DigestEntry, ...], Dict[str, object]]:
+    """Re-digest and grade a skill folder as it stood at one commit.
 
     Description: adds a detached worktree at the commit in a temporary
       directory, runs the app's OWN ``digest_directory`` over the folder,
@@ -237,10 +243,16 @@ def _checked_out_digest(
       number the publisher signed and the number the app will compute
       after it downloads the tarball have to come from the same code, and
       the shared vector file proves this copy is that code.
+
+      THE GRADE IS TAKEN HERE, in the worktree that already exists, so
+      grading costs no second checkout and describes the bytes the
+      signature covered rather than whatever the working tree holds today.
+      It cannot refuse anything: :func:`index_builder.grade.grade_folder`
+      never raises and a bad grade is reporting, not a gate.
     Inputs: repo_root (Path). commit (str) - 40 hex. relpath (str) - the
       folder, relative to the repository root. where (str) - the release
       file, for the message.
-    Output: (digest hex, the entries).
+    Output: (digest hex, the entries, the grade block).
     Raises: ReleaseRefused when the worktree cannot be made or the folder
       is not there at that commit.
     Example: _checked_out_digest(root, sha, "skills/adoom666/work", where)
@@ -255,7 +267,8 @@ def _checked_out_digest(
                 folder.is_dir(),
                 f"{where}: {relpath} is not a folder at commit {commit}",
             )
-            return digest_directory(folder)
+            folder_digest, entries = digest_directory(folder)
+            return folder_digest, entries, grade_folder(folder)
         finally:
             subprocess.run(
                 ["git", "-C", str(repo_root), "worktree", "remove",
@@ -370,7 +383,9 @@ def verify_release(
         f"history this repository publishes",
     )
 
-    actual_digest, entries = _checked_out_digest(repo_root, commit, skill_path, where)
+    actual_digest, entries, grade = _checked_out_digest(
+        repo_root, commit, skill_path, where,
+    )
     _require(
         actual_digest == digest,
         f"{where}: the folder at {commit} digests to {actual_digest}, not the "
@@ -400,6 +415,7 @@ def verify_release(
         size=size,
         files=len(entries),
         scripts=scripts,
+        grade=grade,
     )
 
 
