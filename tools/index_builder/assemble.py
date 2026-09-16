@@ -214,6 +214,12 @@ def _version_entry(
     The review is attached here rather than built here: this job assembles
     an unreviewed index first and the review step fills it in afterwards,
     which is what keeps the review strictly after the publisher signature.
+
+    THE GRADE IS ALREADY DECIDED by the time this runs. It was taken in the
+    verification worktree, over the bytes at this version's own commit, so
+    it is copied through rather than computed here: computing it here would
+    grade whatever the working tree holds and attach that answer to every
+    version, including the old ones it does not describe.
     """
     entry: Dict[str, object] = {
         "v": release.version,
@@ -228,6 +234,7 @@ def _version_entry(
         "scripts": release.scripts,
         "published_at": release.published_at,
         "sig": dict(release.sig),
+        "grade": dict(release.grade),
     }
     if review is not None:
         entry["review"] = review

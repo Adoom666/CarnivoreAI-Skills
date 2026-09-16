@@ -129,6 +129,23 @@ jobs:
           print("items:", len(document["items"]))
           PY
 
+      - name: print the quality grades
+        # REPORTING, NEVER A GATE. This step reads the grades the assemble
+        # step already wrote and prints them into the job summary, which
+        # survives a collapsed log. A low grade does not fail this job and
+        # must not be made to: what a publisher ships is the publisher's
+        # business, and the grade is advisory in exactly the sense the AI
+        # security review is.
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import sys
+          sys.path.insert(0, "tools")
+          from index_builder.grade import summary_table
+          with open("index.unsigned.json", encoding="utf-8") as handle:
+              print(summary_table(json.load(handle)), end="")
+          PY
+
       - name: refuse a stale plugin marketplace file
         # THIS JOB CANNOT COMMIT THE FILE ITSELF. It holds a read only token,
         # and a build that could push to the default branch would be a way
