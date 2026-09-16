@@ -8,6 +8,8 @@ Run as ``python -m index_builder <command>`` from the ``tools`` directory.
   review    fill in the review block for every version, reusing what the
             live index already published for the same bytes.
   sign      sign the index with the key from Secrets Manager, or SKIP.
+  marketplace  write, or prove fresh, the .claude-plugin/marketplace.json the
+            `claude plugin marketplace add` command reads.
 
 SECRETS ARRIVE THROUGH THE ENVIRONMENT, NEVER THROUGH AN ARGUMENT. A command
 line is visible in the process table and lands in a job log the moment
@@ -30,6 +32,14 @@ from typing import Dict, List, Optional
 from .assemble import assemble, write_index
 from .config import load_config
 from .gate import changed_paths, gate_report
+from .marketplace import (
+    MARKETPLACE_PATH,
+    REGENERATE_COMMAND,
+    MarketplaceRefused,
+    build_marketplace,
+    staleness,
+    write_marketplace,
+)
 from .publishers import load_index_key, load_publishers
 from .releases import ReleaseRefused, find_release_files, verify_release
 from .review import (
@@ -143,6 +153,84 @@ def cmd_assemble(args: argparse.Namespace) -> int:
         )
         print(f"wrote the verified live index to {args.live_out} for review reuse")
     return 0
+
+
+def _verified_items(root: Path) -> List[Dict[str, object]]:
+    """Prove the repository and return the items a build would publish.
+
+    Description: runs the same verification path ``assemble`` runs, with
+      the serial left out because the marketplace file does not carry
+      one. Every item it returns therefore survived a release statement
+      check; an untrusted or unverifiable release never reaches the list.
+    Inputs: root (Path) - the repository root.
+    Output: the ``items`` list of the index this repository would publish.
+    Raises: ReleaseRefused when any release cannot be proven.
+    Example: _verified_items(Path(".")) -> [{"id": "adoom666/sme", ...}]
+    """
+    config = load_config(root)
+    publishers = load_publishers(root)
+    slug = _repo_slug(config.repo)
+    verified = [
+        verify_release(root, path, publishers=publishers, repo_slug=slug)
+        for path in find_release_files(root)
+    ]
+    built = assemble(
+        root,
+        publishers=publishers,
+        releases=verified,
+        repo_slug=slug,
+        serial=0,
+        generated_at="1970-01-01T00:00:00Z",
+    )
+    items = built.document["items"]
+    assert isinstance(items, list)
+    return items
+
+
+def cmd_marketplace(args: argparse.Namespace) -> int:
+    """Write the marketplace file, or prove the committed one is fresh.
+
+    :param args: the parsed command line.
+    :returns: 0 when written or already fresh, 1 when stale or refused.
+
+    THE BUILD JOB CANNOT COMMIT THIS FILE ITSELF. It has read only access
+    to the repository, and a job that could push to the default branch
+    would be a way around the review every other published byte goes
+    through. So the check mode is what runs in CI: it says the committed
+    file no longer matches, and prints the one command that fixes it.
+    """
+    root = Path(args.repo_root).resolve()
+    config = load_config(root)
+    publishers = load_publishers(root)
+    try:
+        items = _verified_items(root)
+        document = build_marketplace(
+            items, repo_slug=_repo_slug(config.repo), publishers=publishers,
+        )
+    except (ReleaseRefused, MarketplaceRefused) as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+
+    plugins = document["plugins"]
+    assert isinstance(plugins, list)
+    if args.write:
+        target = Path(args.out) if args.out else root / MARKETPLACE_PATH
+        payload = write_marketplace(document, target)
+        print(
+            f"wrote {len(plugins)} plugins, {len(payload)} bytes, to "
+            f"{target}"
+        )
+        return 0
+
+    named = ", ".join(str(entry["name"]) for entry in plugins)
+    print(f"the build publishes {len(plugins)} plugins: {named or 'none'}")
+    reason = staleness(root, document)
+    if reason is None:
+        print(f"{MARKETPLACE_PATH} is exactly what this build would write")
+        return 0
+    print(f"::error::{reason}. Regenerate it with: {REGENERATE_COMMAND}",
+          file=sys.stderr)
+    return 1
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
@@ -349,6 +437,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     look.add_argument("--out", required=True)
     look.add_argument("--live-index", default="")
     look.set_defaults(handler=cmd_review)
+
+    shelf = sub.add_parser(
+        "marketplace",
+        help="write, or prove fresh, .claude-plugin/marketplace.json",
+    )
+    shelf.add_argument(
+        "--write", action="store_true",
+        help="write the file; without this the command only checks it",
+    )
+    shelf.add_argument(
+        "--out", default="",
+        help="write somewhere other than the repository root, for tests",
+    )
+    shelf.set_defaults(handler=cmd_marketplace)
 
     stamp = sub.add_parser("sign", help="sign the index, or skip when there is no key")
     stamp.add_argument("--index", required=True)

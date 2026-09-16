@@ -129,6 +129,17 @@ jobs:
           print("items:", len(document["items"]))
           PY
 
+      - name: refuse a stale plugin marketplace file
+        # THIS JOB CANNOT COMMIT THE FILE ITSELF. It holds a read only token,
+        # and a build that could push to the default branch would be a way
+        # around the review every other published byte goes through. So the
+        # check is the control: it regenerates the marketplace file from the
+        # releases it just proved, compares it with the committed one BYTE FOR
+        # BYTE, and prints the single command that fixes a difference.
+        run: |
+          python -m index_builder --repo-root "$GITHUB_WORKSPACE" marketplace
+        working-directory: tools
+
       - name: keep the unsigned index
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -299,7 +310,16 @@ jobs:
           cp signed/index.json.minisig deploy/v1/index.json.minisig
           cp site/customHttp.yml deploy/customHttp.yml
           cp site/index.html deploy/index.html
-          (cd deploy && zip -r -q ../deploy.zip .)
+          # the marketplace file is served for people who want to read what
+          # they are about to add. THE CLI DOES NOT READ THIS COPY: it reads
+          # the one in the repository, so this is a convenience and never the
+          # source of truth. it is the byte identical committed file, which
+          # the verify job already proved fresh on this commit.
+          mkdir -p deploy/.claude-plugin
+          cp .claude-plugin/marketplace.json deploy/.claude-plugin/marketplace.json
+          # -r alone skips dotfiles in some zip builds, and a silently absent
+          # file would publish a dead link. the explicit add proves it is in.
+          (cd deploy && zip -r -q ../deploy.zip . .claude-plugin)
           unzip -l deploy.zip
 
       - name: assume the catalog build role
@@ -377,3 +397,33 @@ jobs:
           fi
           grep -iq 'x-content-type-options: *nosniff' headers.txt \
             || { echo "::error::$url did not answer x-content-type-options: nosniff"; exit 1; }
+
+      - name: prove the marketplace file is served
+        env:
+          CATALOG_URL: ${{ vars.CATALOG_URL }}
+          AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+          AMPLIFY_BRANCH: ${{ vars.AMPLIFY_BRANCH }}
+        run: |
+          set -uo pipefail
+          # LAST, ON PURPOSE. the catalog index is already published by the
+          # time this runs, so a host that will not serve a dot directory
+          # goes red here loudly without holding up the thing the app reads.
+          origin="$(printf '%s' "$CATALOG_URL" | sed 's#/v1/index.json$##')"
+          url="$origin/.claude-plugin/marketplace.json"
+          if ! curl --fail --silent --max-time 20 "$url" > marketplace.json; then
+            url="https://${AMPLIFY_BRANCH}.${AMPLIFY_APP_ID}.amplifyapp.com/.claude-plugin/marketplace.json"
+            echo "::notice::the custom domain did not answer, so the marketplace file was checked on the default amplify domain instead: $url"
+            curl --fail --silent --max-time 20 "$url" > marketplace.json \
+              || { echo "::error::$url did not serve the marketplace file"; exit 1; }
+          fi
+          echo "checked: $url"
+          python3 - <<'PY'
+          import json
+          with open("marketplace.json", encoding="utf-8") as handle:
+              document = json.load(handle)
+          for field in ("name", "owner", "plugins"):
+              if field not in document:
+                  raise SystemExit(f"::error::the served marketplace file has no {field}")
+          print("marketplace:", document["name"])
+          print("plugins:", ", ".join(p["name"] for p in document["plugins"]) or "none")
+          PY

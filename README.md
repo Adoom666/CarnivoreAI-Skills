@@ -23,6 +23,7 @@ prove.
 | `digest_vectors.json` | shared with the app, so two digest implementations cannot drift |
 | `tools/index_builder/` | the build job |
 | `site/` | the header file and the one page the host serves |
+| `.claude-plugin/marketplace.json` | generated; what `claude plugin marketplace add` reads |
 
 ## why the release statement lives outside the skill folder
 
@@ -47,11 +48,49 @@ arrive at the same number on its own.
    repository, `scripts/catalog-bootstrap/sign_release.py`. it computes the
    digest, renders the statement, signs it with your minisign key and writes
    `releases/<handle>/<name>/<version>.json`.
-4. commit the release file and open a pull request.
+4. regenerate the plugin marketplace file, so the catalog and the file a
+   Claude Code user installs from say the same thing:
+
+   ```bash
+   cd tools && python3 -m index_builder --repo-root .. marketplace --write
+   ```
+
+5. commit the release file and `.claude-plugin/marketplace.json`, then open a
+   pull request.
 
 the pull request check refuses a diff that edits a skill folder without a
 matching release, because the catalog would otherwise go on serving the
 version you just edited away from.
+
+it also refuses a branch whose `.claude-plugin/marketplace.json` no longer
+matches the releases, and prints the command above. the build job cannot write
+that file itself: it holds a read only token, and a job that could push to
+`main` would be a way around the review every other published byte goes
+through. so the publisher regenerates it, and the check is what makes sure
+they did.
+
+## installing from here with the stock claude code cli
+
+```
+claude plugin marketplace add Adoom666/CarnivoreAI-Skills
+claude plugin install sme@carnivore
+```
+
+`add` reads one file, `.claude-plugin/marketplace.json`, and each entry in it
+points straight at a skill folder under `skills/`. a folder holding a
+`SKILL.md` and no `skills/` subdirectory loads as a single skill, so no plugin
+manifest is written into a skill folder and no copy of one is kept anywhere
+else. that matters: a release statement names a folder's digest, so a file
+added inside it would invalidate a signature, and a copy of it in a second
+tree would be free to drift from the bytes that were signed.
+
+this path is a convenience and it is NOT the signed one. the cli clones the
+repository and reads the folder; it does not check a release statement, and
+nothing here can make it. the signature checking installer is the app's own
+catalog screen, which verifies the index against a pinned key before it
+stages anything. the same file is served at
+`https://catalog.carnivore.ai/.claude-plugin/marketplace.json` for anyone who
+wants to read what they are about to add.
 
 ## the build job
 
