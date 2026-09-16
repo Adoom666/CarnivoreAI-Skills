@@ -431,3 +431,89 @@ def test_the_config_and_the_index_key_load(catalog: dict) -> None:
     assert config.repo == SLUG
     assert config.min_serial == 1
     assert load_index_key(root) is None
+
+
+@requires_minisign
+def test_the_review_subcommand_commits_a_review_bound_to_the_verified_digest(
+    catalog: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single version mode, which is the call the approval flow will make.
+
+    THE DIGEST MUST COME FROM THE RELEASE VERIFICATION, not from anything the
+    caller passed in, because that is what makes the artifact safe to reuse
+    later: a review committed for bytes nobody signed would be a review the
+    build would happily publish against bytes somebody did.
+    """
+    from index_builder import __main__ as cli
+    from index_builder.review_store import committed_review, read_review
+
+    root = catalog["root"]
+    seen: dict = {}
+
+    def fake_review_one(body: str, settings: object, *, now: str) -> dict:
+        """Stand in for the model, and remember what it was shown."""
+        seen["body"] = body
+        return {
+            "status": "reviewed",
+            "summary": "reads the repository and says what is free.",
+            "warnings": [{"kind": "other", "detail": "reads the issue list."}],
+            "model": "test/model",
+            "reviewed_at": now,
+        }
+
+    monkeypatch.setattr(cli, "review_one", fake_review_one, raising=True)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+
+    assert cli.main([
+        "--repo-root", str(root), "review",
+        "--handle", HANDLE, "--name", SKILL, "--version", "1.0.0",
+    ]) == 0
+
+    written = root / "reviews" / HANDLE / SKILL / "1.0.0.json"
+    assert written.is_file(), "the review was not committed where the build looks"
+
+    stored = read_review(root, HANDLE, SKILL, "1.0.0")
+    assert stored is not None
+    assert stored.digest == catalog["digest"], (
+        "the review is not bound to the digest the release verification produced"
+    )
+    assert committed_review(root, HANDLE, SKILL, "1.0.0", catalog["digest"]) is not None
+    assert committed_review(root, HANDLE, SKILL, "1.0.0", "b" * 64) is None
+    assert "SKILL.md" in seen["body"], "the model was not shown the skill text"
+
+
+@requires_minisign
+def test_the_review_subcommand_refuses_a_version_with_no_release(
+    catalog: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No signed release means no proven bytes, so there is nothing to review."""
+    from index_builder import __main__ as cli
+
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    assert cli.main([
+        "--repo-root", str(catalog["root"]), "review",
+        "--handle", HANDLE, "--name", SKILL, "--version", "9.9.9",
+    ]) == 1
+    assert not (catalog["root"] / "reviews").exists(), (
+        "a refused review still wrote something"
+    )
+
+
+def test_the_review_command_refuses_half_a_request(tmp_path: Path) -> None:
+    """The two modes do different things to different files, so neither is guessed.
+
+    A command that quietly picked a mode from an incomplete argument set
+    would, on the wrong guess, write an index where a maintainer asked for
+    one review.
+    """
+    from index_builder import __main__ as cli
+
+    assert cli.main([
+        "--repo-root", str(tmp_path), "review", "--handle", HANDLE,
+    ]) == 1
+    assert cli.main(["--repo-root", str(tmp_path), "review"]) == 1
+    assert cli.main([
+        "--repo-root", str(tmp_path), "review",
+        "--handle", HANDLE, "--name", SKILL, "--version", "1.0.0",
+        "--index", str(tmp_path / "i.json"), "--out", str(tmp_path / "o.json"),
+    ]) == 1

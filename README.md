@@ -131,6 +131,49 @@ when the review cannot be obtained, for any reason at all, the index records
 `status: "unavailable"` and no summary. the app renders that literally as "no
 ai review". a blank review must never read as a clean one.
 
+## where a review lives, and when the model actually runs
+
+a review is committed at `reviews/<handle>/<name>/<version>.json`, mirroring the
+release tree one level out, so the signed statement for a version and the review
+of the same bytes sit at the same coordinates. the file holds exactly the
+`review` block the index carries, plus the `digest` it was taken over.
+
+**a review is bound to a digest, not to a version number.** the build refuses to
+reuse a committed review whose recorded digest is not the digest of the version
+it is building, because a review of different bytes is not a review of these
+bytes. a malformed artifact is treated as absent rather than as a review, and
+the job log names the file and the reason.
+
+the build fills in each version's review from the first of these that answers:
+
+1. a committed review under `reviews/` for that version, at a matching digest.
+2. a review this catalog already published for the same digest.
+3. a model call.
+
+**nothing becomes unreviewed.** the third rung is unchanged: a version with
+neither a committed nor a published review is reviewed at build time exactly as
+it always was. the first two rungs stop the catalog paying twice for the same
+bytes; they do not stop anything being reviewed. the review step writes a table
+into the job summary saying which rung answered for every version, so a reader
+can see whether a model ran at all.
+
+approval is what will write these files. the ruling of 2026-09-16 is that a
+submitted skill sits in a bucket until it is approved, and the approval runs the
+scan once against the bytes it is about to publish and commits the result beside
+the release. that endpoint is not built yet. the same operation runs by hand:
+
+```bash
+cd tools && python3 -m index_builder --repo-root .. \
+  review --handle <handle> --name <name> --version <version>
+```
+
+it verifies the release statement first and binds the review to the digest that
+verification produced, so a review can never be committed for bytes nobody
+signed. it reads the model key from `OPENROUTER_SECRET_VALUE`, and it writes
+nothing at all when the scan fails: an unavailable review is a transient
+failure, not a verdict, and committing one would leave a file a reader could
+mistake for a finding.
+
 ## the grade is advisory too
 
 every version also carries a quality grade of its own text and structure,

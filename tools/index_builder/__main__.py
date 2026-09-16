@@ -5,8 +5,11 @@ Run as ``python -m index_builder <command>`` from the ``tools`` directory.
   assemble  read the repository, prove every release, decide the serial and
             write an UNSIGNED index. Refuses on anything it cannot prove.
   gate      refuse a diff that edits a skill without releasing it.
-  review    fill in the review block for every version, reusing what the
-            live index already published for the same bytes.
+  review    fill in the review block for every version, preferring a
+            review already COMMITTED under reviews/ for the same bytes, then
+            one the live index already published, and calling the model only
+            for a version that has neither. With --handle, --name and
+            --version it instead reviews ONE version and commits the artifact.
   sign      sign the index with the key from Secrets Manager, or SKIP.
   marketplace  write, or prove fresh, the .claude-plugin/marketplace.json the
             `claude plugin marketplace add` command reads.
@@ -27,7 +30,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .assemble import assemble, write_index
 from .config import load_config
@@ -41,7 +44,13 @@ from .marketplace import (
     write_marketplace,
 )
 from .publishers import load_index_key, load_publishers
-from .releases import ReleaseRefused, find_release_files, verify_release
+from .releases import (
+    RELEASES_DIR,
+    SKILLS_DIR,
+    ReleaseRefused,
+    find_release_files,
+    verify_release,
+)
 from .review import (
     ReviewSettings,
     api_key_from_secret,
@@ -49,6 +58,7 @@ from .review import (
     existing_review,
     review_one,
 )
+from .review_store import Review, committed_review, write_review
 from .serial import SerialRefused, decide_serial, decision_lines
 from .sign import SigningFailed, SigningSkipped, sign_index
 
@@ -253,54 +263,188 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def cmd_review(args: argparse.Namespace) -> int:
-    """Fill in every version's review block, honestly.
+def _write_job_summary(rows: Sequence[Tuple[str, str, str]]) -> None:
+    """Record which source answered for each version, where a human reads it.
 
-    :param args: the parsed command line.
-    :returns: 0 always, because an unobtainable review is a recorded state
-        and not a build failure.
+    Description: appends a markdown table to the job summary, so the build
+      page says whether a model actually ran and for which versions. A step
+      log is collapsed by default and scrolls away; the summary survives.
+      Does nothing at all when GITHUB_STEP_SUMMARY is unset, which is every
+      local run and every test.
+    Inputs: rows (sequence of (item id, version, source)).
+    Output: None.
+    Example: _write_job_summary([("adoom666/sme", "1.0.0", "committed")])
     """
-    root = Path(args.repo_root).resolve()
-    config = load_config(root)
-    document = json.loads(Path(args.index).read_text(encoding="utf-8"))
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    lines = [
+        "### security review",
+        "",
+        "| skill | version | review came from |",
+        "|---|---|---|",
+    ]
+    for item_id, version, source in rows:
+        lines.append(f"| {item_id} | {version} | {source} |")
+    if not rows:
+        lines.append("| none | | this build listed no versions |")
+    lines.extend([
+        "",
+        "`committed` is a review already in the repository under `reviews/`, "
+        "`live index` is one this catalog already published for the same "
+        "bytes, and `model` means a model call was made for it on this run.",
+        "",
+    ])
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as exc:
+        # reporting, never a gate. a build must not fail because a log file
+        # could not be appended to.
+        print(f"::warning::could not write the job summary: {exc}")
 
+
+def _review_settings(root: Path) -> ReviewSettings:
+    """Read the model settings from catalog.yml and the key from the environment.
+
+    Description: says loudly when there is no usable key, because the
+      consequence, every unreviewed version recorded unavailable, is one
+      somebody should be able to explain from the log alone.
+    Inputs: root (Path) - the repository root, holding catalog.yml.
+    Output: ReviewSettings; ``api_key`` is None when no usable key was set.
+    Example: _review_settings(Path(".")).model -> "google/gemini-2.5-flash-lite"
+
+    THE KEY IS NEVER LOGGED. It is read here, handed to one Authorization
+    header, and nothing else in this process sees it.
+    """
+    config = load_config(root)
     raw_secret = os.environ.get(REVIEW_SECRET_ENV, "")
     api_key = api_key_from_secret(raw_secret) if raw_secret else None
     if api_key is None:
         _notice(
-            f"no usable OpenRouter key in {REVIEW_SECRET_ENV}, so every "
-            f"version is recorded with review status unavailable"
+            f"no usable OpenRouter key in {REVIEW_SECRET_ENV}, so no model "
+            f"call can be made and every version with neither a committed "
+            f"nor a published review is recorded unavailable"
         )
+    return ReviewSettings(
+        api_key=api_key, model=config.review_model, max_chars=config.review_max_chars,
+    )
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    """Write reviews, either for a whole index or for one version.
+
+    :param args: the parsed command line.
+    :returns: the process exit code.
+
+    TWO MODES, AND THEY ARE EXCLUSIVE. With ``--index`` and ``--out`` this
+    fills in every version's review block in an assembled index, which is
+    what the build job runs. With ``--handle``, ``--name`` and ``--version``
+    it reviews ONE version and commits the artifact under ``reviews/``.
+    Naming neither set, or half of one, is refused rather than guessed at:
+    the two do different things to different files.
+    """
+    single = bool(args.handle or args.name or args.version)
+    if single:
+        if not (args.handle and args.name and args.version):
+            print(
+                "::error::--handle, --name and --version go together; name "
+                "all three to review one version",
+                file=sys.stderr,
+            )
+            return 1
+        if args.index or args.out:
+            print(
+                "::error::--index and --out fill in a whole assembled index; "
+                "--handle, --name and --version review one version and commit "
+                "it. Name one set or the other, not both",
+                file=sys.stderr,
+            )
+            return 1
+        return _review_one_version(args)
+    if not (args.index and args.out):
+        print(
+            "::error::review needs either --index and --out, to fill in an "
+            "assembled index, or --handle, --name and --version, to review "
+            "one version and commit it",
+            file=sys.stderr,
+        )
+        return 1
+    return _review_index(args)
+
+
+def _review_index(args: argparse.Namespace) -> int:
+    """Fill in every version's review block, honestly, cheapest source first.
+
+    :param args: the parsed command line.
+    :returns: 0 always, because an unobtainable review is a recorded state
+        and not a build failure.
+
+    THREE SOURCES, IN THIS ORDER, AND THE ORDER IS THE WHOLE POINT.
+
+    1. A review COMMITTED under ``reviews/`` for this exact version whose
+       recorded digest IS this version's digest. Written by an approval, or
+       by this command's single version mode.
+    2. A review the LIVE INDEX already published for the same digest. This
+       is the behaviour that existed before committed reviews and it is
+       kept, so an index rebuilt against a repository with no committed
+       artifacts still costs nothing.
+    3. A model call.
+
+    NOTHING BECOMES UNREVIEWED. Rung 3 is untouched: a version with neither
+    a committed nor a published review is reviewed at build time exactly as
+    it always was. The first two rungs exist to stop RE-reviewing bytes
+    somebody already paid to review, never to stop reviewing.
+
+    A DIGEST MISMATCH FALLS THROUGH, IT DOES NOT SUBSTITUTE. A committed
+    review of different bytes is not a review of these bytes, so it is
+    ignored, said so in the log, and the version is reviewed properly.
+    """
+    root = Path(args.repo_root).resolve()
+    document = json.loads(Path(args.index).read_text(encoding="utf-8"))
+    settings = _review_settings(root)
 
     live: Optional[Dict[str, object]] = None
     if args.live_index and Path(args.live_index).is_file():
         live = json.loads(Path(args.live_index).read_text(encoding="utf-8"))
 
-    settings = ReviewSettings(
-        api_key=api_key, model=config.review_model, max_chars=config.review_max_chars,
-    )
     now = _now()
-    reused = written = unavailable = 0
+    counts = {"committed": 0, "live": 0, "model": 0, "unavailable": 0}
+    rows: List[Tuple[str, str, str]] = []
 
     for item in document.get("items", []):
         item_id = item.get("id", "")
-        skill_path = f"skills/{item.get('publisher')}/{item.get('name')}"
+        handle = str(item.get("publisher") or "")
+        name = str(item.get("name") or "")
+        skill_path = f"{SKILLS_DIR}/{handle}/{name}"
         for version in item.get("versions", []):
             digest = version.get("digest", "")
+            label = str(version.get("v") or "")
+
+            saved = committed_review(root, handle, name, label, digest)
+            if saved is not None:
+                version["review"] = saved
+                counts["committed"] += 1
+                rows.append((item_id, label, "committed"))
+                continue
+
             carried = existing_review(live, item_id, digest)
             if carried is not None:
                 version["review"] = carried
-                reused += 1
+                counts["live"] += 1
+                rows.append((item_id, label, "live index"))
                 continue
+
             commit = version.get("src", {}).get("commit", "")
             members = _walk_members(root, commit, skill_path)
             if not members:
                 _notice(
-                    f"{item_id} {version.get('v')}: the tree at {commit} could "
-                    f"not be listed, so there is nothing to review"
+                    f"{item_id} {label}: the tree at {commit} could not be "
+                    f"listed, so there is nothing to review"
                 )
                 version["review"] = {"status": "unavailable"}
-                unavailable += 1
+                counts["unavailable"] += 1
+                rows.append((item_id, label, "unavailable"))
                 continue
             body = collect_text(
                 root,
@@ -312,17 +456,112 @@ def cmd_review(args: argparse.Namespace) -> int:
             block = review_one(body, settings, now=now)
             version["review"] = block
             if block["status"] == "reviewed":
-                written += 1
+                counts["model"] += 1
+                rows.append((item_id, label, "model"))
             else:
-                unavailable += 1
+                counts["unavailable"] += 1
+                rows.append((item_id, label, "unavailable"))
 
     write_index(document, Path(args.out))
     print(
-        f"reviews: {reused} reused from the live index, {written} written, "
-        f"{unavailable} unavailable"
+        f"reviews: {counts['committed']} from committed artifacts, "
+        f"{counts['live']} reused from the live index, "
+        f"{counts['model']} written by a model call now, "
+        f"{counts['unavailable']} unavailable"
     )
+    _write_job_summary(rows)
     return 0
 
+
+def _review_one_version(args: argparse.Namespace) -> int:
+    """Review ONE version and commit the artifact under ``reviews/``.
+
+    :param args: the parsed command line, carrying handle, name and version.
+    :returns: 0 when a review was written, 1 when none was.
+
+    THIS IS THE EXACT CALL THE APPROVAL ENDPOINT WILL MAKE. Adam's ruling of
+    2026-09-16 is that approving a submitted skill is what triggers the AI
+    work: the approve step runs the scan ONCE against the bytes it is about
+    to publish and commits the result beside the release. That endpoint is
+    not built yet, so this command is also the operation a maintainer runs
+    by hand to backfill a version the build would otherwise review again.
+
+    THE DIGEST COMES FROM THE VERIFIED RELEASE, NEVER FROM AN ARGUMENT. The
+    release statement is verified first, with the same code the build uses,
+    and the review is bound to the digest that verification produced. So a
+    review can never be committed for bytes no publisher signed, and a
+    version that does not verify refuses here rather than being mislabelled.
+
+    NOTHING IS WRITTEN WHEN THE SCAN FAILS. An unavailable review is a
+    transient failure, not a verdict. Committing one would leave a file the
+    build ignores anyway and that a reader could mistake for a finding, so
+    the command says why and exits 1 and the caller retries.
+    """
+    root = Path(args.repo_root).resolve()
+    handle, name, version = args.handle, args.name, args.version
+    config = load_config(root)
+    publishers = load_publishers(root)
+
+    release_file = root / RELEASES_DIR / handle / name / f"{version}.json"
+    if not release_file.is_file():
+        print(
+            f"::error::there is no {RELEASES_DIR}/{handle}/{name}/{version}.json, "
+            f"so there is no signed release whose bytes could be reviewed",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        release = verify_release(
+            root, release_file,
+            publishers=publishers, repo_slug=_repo_slug(config.repo),
+        )
+    except ReleaseRefused as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+
+    settings = _review_settings(root)
+    if settings.api_key is None:
+        print(
+            f"::error::there is no usable OpenRouter key in "
+            f"{REVIEW_SECRET_ENV}, so no review could be taken and nothing "
+            f"was written",
+            file=sys.stderr,
+        )
+        return 1
+
+    skill_path = f"{SKILLS_DIR}/{handle}/{name}"
+    members = _walk_members(root, release.commit, skill_path)
+    if not members:
+        print(
+            f"::error::the tree at {release.commit} could not be listed, so "
+            f"there is nothing to review",
+            file=sys.stderr,
+        )
+        return 1
+    body = collect_text(
+        root,
+        commit=release.commit,
+        skill_path=skill_path,
+        members=members,
+        max_chars=settings.max_chars,
+    )
+    block = review_one(body, settings, now=_now())
+    if block.get("status") != "reviewed":
+        print(
+            f"::error::the review of {handle}/{name} {version} could not be "
+            f"obtained, so nothing was written. Run it again.",
+            file=sys.stderr,
+        )
+        return 1
+
+    written = write_review(
+        root, handle, name, version, Review(digest=release.digest, block=block),
+    )
+    print(
+        f"wrote {written.relative_to(root)}, bound to digest "
+        f"{release.digest[:12]}, reviewed by {block.get('model')}"
+    )
+    return 0
 
 def _walk_members(root: Path, commit: str, skill_path: str) -> List[tuple]:
     """List a skill folder's members at one commit, with their modes.
@@ -441,10 +680,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     check.add_argument("--head", default="HEAD")
     check.set_defaults(handler=cmd_gate)
 
-    look = sub.add_parser("review", help="write the review block for every version")
-    look.add_argument("--index", required=True)
-    look.add_argument("--out", required=True)
+    look = sub.add_parser(
+        "review",
+        help="fill in an index's review blocks, or commit one version's review",
+    )
+    look.add_argument("--index", default="", help="the assembled index to fill in")
+    look.add_argument("--out", default="", help="where to write the filled in index")
     look.add_argument("--live-index", default="")
+    look.add_argument(
+        "--handle", default="",
+        help="review one version and commit it: the publisher handle",
+    )
+    look.add_argument(
+        "--name", default="",
+        help="review one version and commit it: the skill name",
+    )
+    look.add_argument(
+        "--version", default="",
+        help="review one version and commit it: the version",
+    )
     look.set_defaults(handler=cmd_review)
 
     shelf = sub.add_parser(

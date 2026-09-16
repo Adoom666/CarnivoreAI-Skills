@@ -9,5 +9,8 @@
 .github/**      @Adoom666
 tools/**        @Adoom666
 publishers/**   @Adoom666
+# a committed review is published verbatim into the signed index, so it is
+# text this repository vouches for.
+reviews/**      @Adoom666
 catalog.yml     @Adoom666
 CODEOWNERS      @Adoom666
