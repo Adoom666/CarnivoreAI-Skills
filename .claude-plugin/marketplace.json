@@ -1,0 +1,69 @@
+{
+  "name": "carnivore",
+  "owner": {
+    "name": "Adoom666",
+    "url": "https://github.com/Adoom666"
+  },
+  "plugins": [
+    {
+      "name": "11-stars",
+      "source": "./skills/adoom666/11-stars",
+      "description": "Facilitator-run breakthrough brainstorming session on a topic that produces a compiled ideas document.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Adoom666",
+        "url": "https://github.com/Adoom666"
+      }
+    },
+    {
+      "name": "design-engineer",
+      "source": "./skills/adoom666/design-engineer",
+      "description": "Expert front end design skills which should be used whenever you make any changes to a front-end of a website or application that has a UI (even a console UI).",
+      "version": "1.0.0",
+      "author": {
+        "name": "Adoom666",
+        "url": "https://github.com/Adoom666"
+      }
+    },
+    {
+      "name": "devils-advocate",
+      "source": "./skills/adoom666/devils-advocate",
+      "description": "Performs Devils Advocate Review (DAR) on plans and decisions.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Adoom666",
+        "url": "https://github.com/Adoom666"
+      }
+    },
+    {
+      "name": "make-readme",
+      "source": "./skills/adoom666/make-readme",
+      "description": "Generate or update a comprehensive README.md based on deep codebase analysis.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Adoom666",
+        "url": "https://github.com/Adoom666"
+      }
+    },
+    {
+      "name": "progress",
+      "source": "./skills/adoom666/progress",
+      "description": "Produces a concise, read-only progress report of the CURRENT session — opening with a 1-2 sentence plain-English summary of the overall goal for a non-technical reader, followed by a markdown table.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Adoom666",
+        "url": "https://github.com/Adoom666"
+      }
+    },
+    {
+      "name": "sme",
+      "source": "./skills/adoom666/sme",
+      "description": "Invoke when user says \"SME\", \"You're a SME\", or wants expert-level problem solving.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Adoom666",
+        "url": "https://github.com/Adoom666"
+      }
+    }
+  ]
+}
