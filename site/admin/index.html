@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="referrer" content="no-referrer" />
+        <meta name="robots" content="noindex, nofollow" />
+        <title>carnivore catalog admin</title>
+      <script type="module" crossorigin src="./admin.js"></script>
+      <link rel="stylesheet" crossorigin href="./admin.css">
+    </head>
+    <body>
+        <!--
+            THE ONLY SCRIPT ON THIS PAGE IS THIS ONE, and it is external.
+            The CSP served for /admin/* is script-src 'self' with no nonce
+            and no 'unsafe-inline', so an inline script here would be a
+            document that loads and then does nothing, with the reason only
+            in a console nobody is watching. tests/test_admin_page_bundle.py
+            reads the EMITTED file and fails on an inline script or an on*
+            attribute.
+        -->
+        <div id="admin-root"></div>
+    </body>
+</html>

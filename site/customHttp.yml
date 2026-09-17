@@ -8,7 +8,41 @@
 # five minutes of caching with must-revalidate is the whole freshness story.
 # the index is small, it changes when somebody publishes, and a client that
 # refuses to revalidate would keep serving a version after it was revoked.
+#
+# THE ADMIN PAGE IS A SEPARATE, STRICTER PATTERN, and the two blocks above
+# it are untouched on purpose: a deployment that silently changed a cache
+# header on the index would show up as clients holding a stale catalog for
+# a day. /admin/* is a signed-in tool rather than a public artefact, so it
+# is never stored by a cache and never framed, and its content security
+# policy names no third party origin in any directive. the page talks only
+# to the origin that served it, which is what connect-src 'self' says.
+#
+# /admin/index.html IS LISTED BEFORE /admin/*, most specific first, so the
+# html document takes the no-cache a real document needs while the two
+# assets beside it stay no-store. X-Content-Type-Options is repeated
+# inside the /admin/* block rather than left to the ** pattern below: how
+# amplify combines two patterns that both match one path is not something
+# this file should be guessing at, and a missing nosniff on a path that
+# serves javascript is not a guess worth making. The deploy job's own
+# header assertion is what MEASURES which headers actually landed, and it
+# prints the whole set.
 customHeaders:
+  - pattern: /admin/index.html
+    headers:
+      - key: Cache-Control
+        value: no-cache
+  - pattern: /admin/*
+    headers:
+      - key: Content-Security-Policy
+        value: "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      - key: Cache-Control
+        value: no-store
+      - key: X-Frame-Options
+        value: DENY
+      - key: Referrer-Policy
+        value: no-referrer
+      - key: X-Content-Type-Options
+        value: nosniff
   - pattern: /v1/*
     headers:
       - key: Cache-Control
