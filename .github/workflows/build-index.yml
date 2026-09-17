@@ -47,6 +47,15 @@ on:
       - revocations/**
       - catalog.yml
       - tools/**
+      # THE SITE DIRECTORY IS IN THIS LIST DELIBERATELY, and it was absent
+      # before the admin page arrived. Everything under site/ is deployed
+      # verbatim inside the zip this workflow builds: customHttp.yml is
+      # the ONLY thing that sets response headers for the whole host, and
+      # site/admin holds the admin bundle. A commit touching only one of
+      # them ran no workflow at all, so the change sat in the repository
+      # and never reached the site, which reads exactly like a deploy that
+      # worked.
+      - site/**
       - .github/workflows/build-index.yml
   pull_request:
     branches:
@@ -341,6 +350,14 @@ jobs:
           cp signed/index.json.minisig deploy/v1/index.json.minisig
           cp site/customHttp.yml deploy/customHttp.yml
           cp site/index.html deploy/index.html
+          # THE ADMIN PAGE RIDES IN THIS SAME ZIP, and that is the whole
+          # reason it is here rather than in a deployment of its own. an
+          # amplify manual deploy REPLACES the branch, so a second deploy
+          # carrying only the admin page would delete the signed index and
+          # a second one carrying only the index would delete the admin
+          # page. shipping them together is what makes neither able to
+          # wipe the other.
+          cp -r site/admin deploy/admin
           # the marketplace file is served for people who want to read what
           # they are about to add. THE CLI DOES NOT READ THIS COPY: it reads
           # the one in the repository, so this is a convenience and never the
@@ -458,3 +475,34 @@ jobs:
           print("marketplace:", document["name"])
           print("plugins:", ", ".join(p["name"] for p in document["plugins"]) or "none")
           PY
+
+      - name: prove the admin page is served, with its own headers
+        env:
+          CATALOG_URL: ${{ vars.CATALOG_URL }}
+          AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+          AMPLIFY_BRANCH: ${{ vars.AMPLIFY_BRANCH }}
+        run: |
+          set -uo pipefail
+          # TWO ASSERTIONS, AND THEY MEASURE DIFFERENT THINGS. the first
+          # says the document is there at all, which is what catches the
+          # zip step losing the directory. the second says the stricter
+          # header block in customHttp.yml was actually applied to this
+          # path, which is what catches the header file being deployed
+          # without it. the whole header set is printed either way,
+          # because how amplify combines two patterns that both match one
+          # path is worth reading rather than assuming.
+          origin="$(printf '%s' "$CATALOG_URL" | sed 's#/v1/index.json$##')"
+          url="$origin/admin/"
+          if ! curl --fail --silent --show-error --head --max-time 20 "$url" > admin-headers.txt; then
+            url="https://${AMPLIFY_BRANCH}.${AMPLIFY_APP_ID}.amplifyapp.com/admin/"
+            echo "::notice::the custom domain did not answer, so the admin page was checked on the default amplify domain instead: $url"
+            curl --fail --silent --show-error --head --max-time 20 "$url" > admin-headers.txt \
+              || { echo "::error::$url did not answer at all"; exit 1; }
+          fi
+          echo "checked: $url"
+          cat admin-headers.txt
+          grep -iq 'content-type: *text/html' admin-headers.txt \
+            || { echo "::error::$url did not answer text/html"; exit 1; }
+          grep -iq 'content-security-policy:' admin-headers.txt \
+            || { echo "::error::$url carries no content-security-policy header, so the /admin/* block in site/customHttp.yml was not applied"; exit 1; }
+          echo "the admin page is served and carries its own content security policy"
