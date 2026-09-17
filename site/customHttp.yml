@@ -17,9 +17,18 @@
 # policy names no third party origin in any directive. the page talks only
 # to the origin that served it, which is what connect-src 'self' says.
 #
-# /admin/index.html IS LISTED BEFORE /admin/*, most specific first, so the
-# html document takes the no-cache a real document needs while the two
-# assets beside it stay no-store. X-Content-Type-Options is repeated
+# THERE IS NO SEPARATE /admin/index.html PATTERN, AND THE REASON IS A
+# MEASUREMENT. One was written first, listed before /admin/* on the
+# assumption that amplify applies the most specific pattern, so that the
+# html document could take the no-cache a real document usually wants.
+# It does not: the first deploy was probed on a cloudfront MISS and
+# /admin/index.html answered `cache-control: no-store`, the value from
+# the /admin/* block, with the narrower pattern having no effect at all.
+# Config that claims to do something and does not is worse than config
+# that is absent, so it was removed rather than left as decoration.
+# no-store is the STRICTER of the two, so nothing was given up: the
+# document is simply never stored instead of being revalidated.
+# X-Content-Type-Options is repeated
 # inside the /admin/* block rather than left to the ** pattern below: how
 # amplify combines two patterns that both match one path is not something
 # this file should be guessing at, and a missing nosniff on a path that
@@ -27,10 +36,6 @@
 # header assertion is what MEASURES which headers actually landed, and it
 # prints the whole set.
 customHeaders:
-  - pattern: /admin/index.html
-    headers:
-      - key: Cache-Control
-        value: no-cache
   - pattern: /admin/*
     headers:
       - key: Content-Security-Policy
