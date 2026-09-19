@@ -640,3 +640,102 @@ def test_a_published_version_entry_keeps_its_grade_when_the_review_lands(
     assert entry["grade"] == assembled_grade, (
         "the review step changed the grade it was supposed to carry through"
     )
+
+
+def _published_index(path: Path, digest: str, verdict: str = "flagged") -> Path:
+    """An index carrying one published review, as the live catalog does.
+
+    :param path: where to write it.
+    :param digest: the digest the published review is bound to.
+    :param verdict: the verdict it recorded.
+    :returns: the file.
+    """
+    document = {"items": [{
+        "id": f"{HANDLE}/{SKILL}",
+        "publisher": HANDLE,
+        "name": SKILL,
+        "versions": [{"v": "1.0.0", "digest": digest, "review": {
+            "status": "reviewed",
+            "verdict": verdict,
+            "summary": "reads the repository and says what is free.",
+            "warnings": [{
+                "kind": "other",
+                "detail": "reads the issue list.",
+                "file": "SKILL.md",
+            }],
+            "model": "test/model",
+            "reviewed_at": "2026-09-17T00:00:00Z",
+        }}],
+    }]}
+    out = path / "live-index.json"
+    out.write_text(json.dumps(document), encoding="utf-8")
+    return out
+
+
+@requires_minisign
+def test_from_index_commits_the_published_review_without_calling_the_model(
+    catalog: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE MIGRATION PATH. Six versions shipped before a committed review
+    was required, and re-reviewing them would pay a model for a second
+    opinion that could differ from the words users have already read.
+
+    The model is faked with something that RAISES, because a fake that
+    counted calls could read zero because the test wired it up wrong. No
+    api key is set either, so a path that needed one would fail here.
+    """
+    from index_builder import __main__ as cli
+    from index_builder.review_store import read_review
+
+    def explode(*args: object, **kwargs: object) -> dict:
+        raise AssertionError("--from-index called the model; it must copy")
+
+    monkeypatch.setattr(cli, "review_one", explode, raising=True)
+    monkeypatch.delenv("OPENROUTER_SECRET_VALUE", raising=False)
+
+    root = catalog["root"]
+    source = _published_index(tmp_path, catalog["digest"])
+    assert cli.main([
+        "--repo-root", str(root), "review",
+        "--handle", HANDLE, "--name", SKILL, "--version", "1.0.0",
+        "--from-index", str(source),
+    ]) == 0
+
+    stored = read_review(root, HANDLE, SKILL, "1.0.0")
+    assert stored is not None
+    assert stored.digest == catalog["digest"], (
+        "the copy is not bound to the digest the release verification "
+        "produced, so it approves bytes nobody signed"
+    )
+    assert stored.block["verdict"] == "flagged", (
+        "the copy changed the verdict; it must carry the one that was taken"
+    )
+    assert stored.block["warnings"], "the findings were dropped in the copy"
+
+
+@requires_minisign
+def test_from_index_refuses_a_published_review_of_other_bytes(
+    catalog: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    """A review of other bytes cannot be laundered in by editing the source.
+
+    The digest comes from the verified release statement, never from the
+    document being copied, so pointing this at an index that reviewed
+    something else writes nothing and says which two digests differ.
+    """
+    from index_builder import __main__ as cli
+
+    monkeypatch.delenv("OPENROUTER_SECRET_VALUE", raising=False)
+    root = catalog["root"]
+    source = _published_index(tmp_path, "c" * 64)
+    assert cli.main([
+        "--repo-root", str(root), "review",
+        "--handle", HANDLE, "--name", SKILL, "--version", "1.0.0",
+        "--from-index", str(source),
+    ]) == 1
+    assert not (root / "reviews" / HANDLE / SKILL / "1.0.0.json").exists(), (
+        "a refused copy still wrote a file"
+    )
+    printed = capsys.readouterr().err
+    assert catalog["digest"][:12] in printed
+    assert "c" * 12 in printed

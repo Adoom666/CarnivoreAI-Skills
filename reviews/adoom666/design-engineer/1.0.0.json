@@ -1,0 +1,9 @@
+{
+  "digest": "aeaacd1cc67d2f29e7d2aa42ab55d366a5b61c3adc75a23ea9a3c3208fd7476f",
+  "status": "reviewed",
+  "verdict": "clean",
+  "summary": "this skill provides expert front-end design guidance, covering philosophy, workflow, and technical implementation details for creating well-crafted user interfaces. it references various markdown files for detailed style archetypes, typography, spacing, depth, motion, and tailwind css usage, and includes validation steps using playwright.",
+  "warnings": [],
+  "model": "google/gemini-2.5-flash-lite",
+  "reviewed_at": "2026-09-19T15:10:52Z"
+}

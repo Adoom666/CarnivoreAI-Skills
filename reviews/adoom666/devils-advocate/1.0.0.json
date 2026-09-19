@@ -1,0 +1,9 @@
+{
+  "digest": "9ebf5b3273a44f6ea9072d95a04aec44fecee97354cc2a297ead8993e679f94b",
+  "status": "reviewed",
+  "verdict": "clean",
+  "summary": "this skill performs a devils advocate review on plans and decisions by spawning sub-agents to challenge assumptions, find edge cases, and validate from multiple perspectives. it guards against over-engineering and iterates until alignment before presenting a refined plan.",
+  "warnings": [],
+  "model": "google/gemini-2.5-flash-lite",
+  "reviewed_at": "2026-09-19T15:10:52Z"
+}
