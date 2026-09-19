@@ -169,18 +169,25 @@ jobs:
               print(summary_table(json.load(handle)), end="")
           PY
 
-      - name: refuse a blocked security review
-        # THE BACKSTOP, AND IT IS THE HALF THAT RUNS ON A PULL REQUEST. The
-        # approval gate lives in the script a maintainer runs on his own
+      - name: refuse bytes no committed review approved
+        # THE PUBLISH GATE, AND IT IS THE HALF THAT RUNS ON A PULL REQUEST.
+        # The approval gate lives in the script a maintainer runs on his own
         # machine, and a gate that only lives in one script is a gate a hand
         # commit walks past. This step reads the COMMITTED reviews under
         # reviews/ for the versions just assembled and refuses the whole
-        # build when one of them is blocked with no written override. It
-        # holds no cloud credential and calls no model, so it runs for
-        # anybody's pull request, which is the thing the review job cannot
-        # do. An override is a reason, an actor and a moment written into
-        # the committed artifact, which sits under CODEOWNERS and therefore
-        # shows up in the diff rather than being applied silently.
+        # build unless EVERY published version carries one bound to its exact
+        # folder digest, and that review is not blocked without a written
+        # override. It holds no cloud credential and calls no model, so it
+        # runs for anybody's pull request, which is the thing the review job
+        # cannot do. An override is a reason, an actor and a moment written
+        # into the committed artifact, which sits under CODEOWNERS and
+        # therefore shows up in the diff rather than being applied silently.
+        #
+        # THE DIGEST IS THE GATE. Until 2026-09-19 an absent review and a
+        # review of other bytes both printed a row and passed, so editing a
+        # folder after its review published bytes nothing had approved: the
+        # build reviewed them and wrote the verdict into the index instead of
+        # acting on it.
         run: |
           python -m index_builder --repo-root "$GITHUB_WORKSPACE" check-reviews \
             --index "$GITHUB_WORKSPACE/index.unsigned.json"

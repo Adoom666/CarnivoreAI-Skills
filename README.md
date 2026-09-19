@@ -211,6 +211,13 @@ from those bytes with the code the app uses. that is what
 after it stages an approved submission, and it prints the publish command only
 when this exits zero.
 
+**then commit the folder exactly as it was reviewed.** the artifact the staged
+review writes is bound to the digest of the bytes it read, so any edit to the
+folder after that point leaves a version whose committed review describes
+something else, and `check-reviews` refuses the build naming both digests. the
+fix is to run the review again over the bytes you actually mean to publish and
+commit the artifact it writes, in the same change as the folder.
+
 **a blocked verdict exits non zero.** to publish one anyway, run it again with
 `--override-blocked "<reason>"`. the reason, who you are and the moment are
 written into the committed review as an `override` block. it NEVER changes the
@@ -219,11 +226,49 @@ the file sits under `reviews/`, which `CODEOWNERS` routes to the owner, so the
 override shows up in the pull request diff rather than being applied silently.
 `--require-clean` refuses anything that is not clean, not only what is blocked.
 
-**the backstop runs in `verify`, which every pull request reaches.**
-`check-reviews` reads the committed reviews for the versions just assembled and
-refuses the build when one is blocked with no well formed override, or when one
-exists and cannot be read. a gate that only lives in the script a maintainer
-runs is a gate a hand commit walks past.
+**a version publishes only with a committed review bound to its exact bytes.**
+`check-reviews` runs in `verify`, which every pull request reaches, and it
+refuses the whole build unless every published version carries a review under
+`reviews/` whose recorded digest IS that version's folder digest. edit the
+folder, re-run the review. three things refuse, named apart in the message
+along with both digests, because the move that fixes each one is different:
+`no committed review for these bytes` (there is none, or the file exists and
+cannot be read), `committed review is for a different digest` (the folder
+changed after the review was taken), and `blocked without override` (the review
+read these exact bytes and refused them). a gate that only lives in the script
+a maintainer runs is a gate a hand commit walks past.
+
+**only a committed review approves bytes.** a review this catalog already
+published for the same digest is good enough to SAVE A MODEL CALL, which is all
+rung 2 above uses it for, and it is not good enough to ADMIT anything. the live
+index is the artifact the build is replacing, so letting it approve bytes makes
+the gate read its own output as its input, and one bad build would approve
+those bytes for every build after it. a committed artifact sits under
+`reviews/`, which `CODEOWNERS` routes to the owner, so it reaches publication
+through a diff a human read.
+
+**what this closes.** until 2026-09-19 an absent committed review and a review
+of other bytes both printed a row and passed. so an operator who edited a skill
+folder after the approval pull reviewed the staged bytes, or who never took a
+review at all, published bytes nothing had approved: the build reviewed them
+and wrote the verdict into the index, which RECORDS a finding rather than
+acting on it.
+
+**migrating a version published before this rule**, where the review exists
+only in the signed index:
+
+```bash
+cd tools && python3 -m index_builder --repo-root .. \
+  review --handle <handle> --name <name> --version <version> \
+  --from-index <a verified index.json>
+```
+
+it verifies the release statement first and copies the published review only
+when the index bound it to THAT digest, so a review of other bytes cannot be
+laundered into `reviews/` by editing what it is copied from. it calls no model,
+needs no api key, and carries the verdict, the findings and any override
+through unchanged. it approves nothing by itself: a copied `blocked` verdict is
+still blocked and still refuses the build.
 
 **a review with no verdict is stale.** everything reviewed before the verdict
 existed answered a question the gate does not ask, so neither the committed

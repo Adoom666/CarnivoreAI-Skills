@@ -10,10 +10,14 @@ Run as ``python -m index_builder <command>`` from the ``tools`` directory.
             one the live index already published, and calling the model only
             for a version that has neither. With --handle, --name and
             --version it instead reviews ONE version and commits the artifact,
-            and exits non zero when that version's verdict is blocked.
-  check-reviews  refuse the build when a version's committed review is
-            blocked with no written override. Holds no credential and calls
-            no model, so it runs on a pull request from anybody.
+            and exits non zero when that version's verdict is blocked. With
+            --from-index it instead COPIES the review this catalog already
+            published for the same digest into reviews/, calling no model.
+  check-reviews  refuse the build unless EVERY published version carries a
+            committed review bound to its exact folder digest, and that
+            review is not blocked without a written override. Holds no
+            credential and calls no model, so it runs on a pull request
+            from anybody.
   sign      sign the index with the key from Secrets Manager, or SKIP.
   marketplace  write, or prove fresh, the .claude-plugin/marketplace.json the
             `claude plugin marketplace add` command reads.
@@ -53,6 +57,7 @@ from .releases import (
     RELEASES_DIR,
     SKILLS_DIR,
     ReleaseRefused,
+    VerifiedRelease,
     find_release_files,
     verify_release,
 )
@@ -85,6 +90,13 @@ REVIEW_SECRET_ENV = "OPENROUTER_SECRET_VALUE"
 
 #: The environment variable carrying the index signing secret's raw value.
 SIGNING_SECRET_ENV = "INDEX_SIGNING_SECRET_VALUE"
+
+#: The three ways a published version fails the publish gate. They are
+#: named apart because the move that fixes each one is different, and a
+#: refusal an operator cannot act on is a refusal that gets forced past.
+REFUSE_ABSENT = "no committed review for these bytes"
+REFUSE_STALE = "committed review is for a different digest"
+REFUSE_BLOCKED = "blocked without override"
 
 
 def _notice(message: str) -> None:
@@ -346,6 +358,54 @@ def _verdict_of(block: Dict[str, object]) -> str:
     return str(verdict) if isinstance(verdict, str) and verdict else "none"
 
 
+def _short(digest: str) -> str:
+    """One digest, shortened for a message, with an empty one named.
+
+    Description: a refusal quotes two digests so a reader can see at a
+      glance whether they differ. An empty one prints ``unknown`` rather
+      than nothing, because a blank in that sentence reads like a match.
+    Inputs: digest (str) - a hex digest, possibly empty.
+    Output: str.
+    Example: _short("a" * 64) -> "aaaaaaaaaaaa"
+    """
+    return digest[:12] if digest else "unknown"
+
+
+def _verified_release(
+    root: Path, handle: str, name: str, version: str,
+) -> Optional[VerifiedRelease]:
+    """Verify one version's signed release statement, or say why not.
+
+    Description: the digest a review is bound to comes from HERE, never
+      from the folder being reviewed and never from the index being
+      replaced, so a review can never be committed for bytes no publisher
+      signed.
+    Inputs: root (Path) - the repository root. handle (str). name (str).
+      version (str).
+    Output: the verified release, or None when it could not be verified,
+      in which case the reason has already been printed to stderr.
+    Example: _verified_release(root, "adoom666", "sme", "1.0.0")
+    """
+    config = load_config(root)
+    publishers = load_publishers(root)
+    release_file = root / RELEASES_DIR / handle / name / f"{version}.json"
+    if not release_file.is_file():
+        print(
+            f"::error::there is no {RELEASES_DIR}/{handle}/{name}/{version}.json, "
+            f"so there is no signed release whose bytes could be reviewed",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        return verify_release(
+            root, release_file,
+            publishers=publishers, repo_slug=_repo_slug(config.repo),
+        )
+    except ReleaseRefused as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return None
+
+
 def _review_settings(root: Path) -> ReviewSettings:
     """Read the model settings from catalog.yml and the key from the environment.
 
@@ -386,7 +446,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     Naming neither set, or half of one, is refused rather than guessed at:
     the two do different things to different files.
     """
-    single = bool(args.handle or args.name or args.version or args.staged)
+    single = bool(args.handle or args.name or args.version or args.staged
+                  or args.from_index)
     if single:
         if not (args.handle and args.name and args.version):
             print(
@@ -404,6 +465,17 @@ def cmd_review(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        if args.from_index:
+            if args.staged or args.override_blocked is not None or args.require_clean:
+                print(
+                    "::error::--from-index copies a review that was already "
+                    "taken and published; it calls no model and decides no "
+                    "verdict, so --staged, --override-blocked and "
+                    "--require-clean do not apply to it",
+                    file=sys.stderr,
+                )
+                return 1
+            return _review_from_index(args)
         return _review_one_version(args)
     if not (args.index and args.out):
         print(
@@ -645,23 +717,8 @@ def _review_one_version(args: argparse.Namespace) -> int:
             folder, members=members, max_chars=settings.max_chars,
         )
     else:
-        config = load_config(root)
-        publishers = load_publishers(root)
-        release_file = root / RELEASES_DIR / handle / name / f"{version}.json"
-        if not release_file.is_file():
-            print(
-                f"::error::there is no {RELEASES_DIR}/{handle}/{name}/{version}.json, "
-                f"so there is no signed release whose bytes could be reviewed",
-                file=sys.stderr,
-            )
-            return 1
-        try:
-            release = verify_release(
-                root, release_file,
-                publishers=publishers, repo_slug=_repo_slug(config.repo),
-            )
-        except ReleaseRefused as exc:
-            print(f"::error::{exc}", file=sys.stderr)
+        release = _verified_release(root, handle, name, version)
+        if release is None:
             return 1
         digest = release.digest
         skill_path = f"{SKILLS_DIR}/{handle}/{name}"
@@ -740,27 +797,143 @@ def _review_one_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def _live_digests_note(live: object, item_id: str) -> str:
+    """Name what the source index does hold for an item, for a refusal.
+
+    Description: a refusal saying only "no match" leaves the operator
+      guessing between a missing item and moved bytes, which are different
+      problems with different fixes.
+    Inputs: live (object) - the parsed index document. item_id (str).
+    Output: str - a clause to append to a sentence, or "".
+    Example: _live_digests_note(doc, "adoom666/sme") -> " (it holds 1.0.0 at dfd68a92024a)"
+    """
+    items = live.get("items") if isinstance(live, dict) else None
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, dict) or item.get("id") != item_id:
+            continue
+        versions = item.get("versions")
+        if not isinstance(versions, list):
+            return ""
+        held = ", ".join(
+            f"{entry.get('v')} at {_short(str(entry.get('digest') or ''))}"
+            for entry in versions if isinstance(entry, dict)
+        )
+        return f" (it holds {held})" if held else ""
+    return f" (it lists no item {item_id})"
+
+
+def _review_from_index(args: argparse.Namespace) -> int:
+    """Commit the review this catalog already published for these bytes.
+
+    :param args: the parsed command line, carrying handle, name, version
+        and the index to copy the review out of.
+    :returns: 0 when the artifact was written, 1 when it was not.
+
+    THE MIGRATION PATH, AND IT NEVER CALLS THE MODEL. Versions published
+    before a committed review was required carry their review only in the
+    signed index. This copies one into ``reviews/`` with its verdict, its
+    findings and any override intact, so the publish gate has a committed
+    artifact to read without paying for a second opinion that could differ
+    from the words users have already been shown.
+
+    THE DIGEST COMES FROM THE SIGNED RELEASE, NEVER FROM THE INDEX. The
+    release statement is verified first and the review is copied only when
+    the source index bound it to THAT digest, so a review of other bytes
+    cannot be laundered into the reviews tree by editing what it is copied
+    from. A mismatch refuses and writes nothing.
+
+    IT APPROVES NOTHING BY ITSELF. The copied verdict is the one that was
+    taken; a blocked one stays blocked and still refuses the build unless
+    the override it already carries says otherwise.
+    """
+    root = Path(args.repo_root).resolve()
+    handle, name, version = args.handle, args.name, args.version
+    source = Path(args.from_index).expanduser()
+    if not source.is_file():
+        print(
+            f"::error::{source} is not a file, so there is no published "
+            f"review to copy",
+            file=sys.stderr,
+        )
+        return 1
+    release = _verified_release(root, handle, name, version)
+    if release is None:
+        return 1
+    digest = release.digest
+    try:
+        live = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"::error::{source} could not be read as JSON ({exc}), so no "
+            f"review was copied",
+            file=sys.stderr,
+        )
+        return 1
+    item_id = f"{handle}/{name}"
+    block = existing_review(live, item_id, digest)
+    if block is None:
+        print(
+            f"::error::{source} carries no usable review bound to digest "
+            f"{_short(digest)} for {item_id} {version}"
+            f"{_live_digests_note(live, item_id)}. A review of other bytes "
+            f"is not a review of these bytes, so nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    written = write_review(
+        root, handle, name, version, Review(digest=digest, block=dict(block)),
+    )
+    print(
+        f"copied the published review into {written.relative_to(root)}, "
+        f"bound to digest {_short(digest)}, verdict {_verdict_of(block)}"
+    )
+    return 0
+
+
 def cmd_check_reviews(args: argparse.Namespace) -> int:
-    """Refuse a build carrying a blocked version, and print every verdict.
+    """Refuse a version whose exact bytes no committed review approved.
 
     :param args: the parsed command line, naming the assembled index.
     :returns: 0 when every published version may be published, 1 when one
         may not.
 
-    THE BACKSTOP, AND IT RUNS ON PULL REQUESTS. The approval gate lives in
-    the script a maintainer runs, and a gate that only lives in one script
-    is a gate a hand commit walks past. This step reads the COMMITTED
-    reviews for the versions the index just assembled and refuses the whole
-    build when one of them is blocked with no well formed override. It
-    holds no cloud credential and calls no model, so it runs in the verify
-    job on every pull request from anybody.
+    THE PUBLISH GATE, AND IT RUNS ON PULL REQUESTS. The approval gate lives
+    in the script a maintainer runs on his own machine, and a gate that
+    only lives in one script is a gate a hand commit walks past. This step
+    reads the COMMITTED reviews for the versions the index just assembled
+    and refuses the whole build unless EVERY published version carries one
+    bound to its exact folder digest. It holds no cloud credential and
+    calls no model, so it runs in the verify job for anybody's pull
+    request, which is the thing the review job cannot do.
 
-    A REVIEW OF OTHER BYTES DECIDES NOTHING. A committed review whose
-    recorded digest is not this version's digest is reported ``stale`` and
-    does not refuse: it is not a review of what is being published, and the
-    review step will take a fresh one. Absent is reported too, because a
-    version with no committed review is one the build will pay a model for,
-    which is a thing worth seeing rather than a silent blank.
+    THE HOLE THIS CLOSES. Until 2026-09-19 an absent committed review and a
+    committed review of other bytes both printed a row and passed. So an
+    operator who edited the folder AFTER the staged review, or who never
+    took one, published bytes nothing had approved: the build reviewed them
+    and wrote the verdict into the index, which records a finding rather
+    than acting on it.
+
+    THREE WAYS TO FAIL, NAMED APART, because the operator's next move is
+    different for each one:
+
+    - ``no committed review for these bytes``: nothing under ``reviews/``
+      for this version, or a file that exists and cannot be read. Review
+      the bytes and commit the artifact.
+    - ``committed review is for a different digest``: the folder changed
+      after the review was taken. Review it again.
+    - ``blocked without override``: the review read these exact bytes and
+      refused them. Publish needs a written override, or different bytes.
+
+    ONLY A COMMITTED REVIEW APPROVES BYTES. A review the LIVE INDEX carries
+    for the same digest is good enough to SAVE A MODEL CALL, which is all
+    rung 2 of the review step uses it for, and it is not good enough to
+    ADMIT anything: the live index is the artifact this build replaces, so
+    letting it approve bytes makes the gate's input its own output, and one
+    bad build would then approve those bytes for every build after it. A
+    committed artifact sits under ``reviews/``, which ``CODEOWNERS`` routes
+    to the owner, so it reaches publication through a diff a human read.
     """
     root = Path(args.repo_root).resolve()
     document = json.loads(Path(args.index).read_text(encoding="utf-8"))
@@ -776,31 +949,51 @@ def cmd_check_reviews(args: argparse.Namespace) -> int:
             digest = str(version.get("digest") or "")
             found = read_review(root, handle, name, label)
             if found is None:
-                # A FILE THAT EXISTS AND CANNOT BE READ IS NOT AN ABSENT ONE.
-                # Absent is normal and means the review step will pay for a
-                # fresh call. Present and unreadable is a committed review
-                # somebody broke, and treating it as absent would make
-                # corrupting the artifact the way past this check.
+                # A FILE THAT EXISTS AND CANNOT BE READ IS NOT AN ABSENT
+                # ONE. Both refuse, because neither approves these bytes,
+                # and the sentence still says which, so the operator knows
+                # whether to write a review or repair one.
                 try:
                     exists = review_path(root, handle, name, label).is_file()
                 except ReviewArtifactInvalid:
                     exists = False
                 if exists:
+                    why = "its committed review exists and could not be read"
                     rows.append((item_id, label, "unreadable", "refused"))
-                    refused.append(f"{item_id} {label} (its committed review "
-                                   f"could not be read)")
-                    continue
-                rows.append((item_id, label, "none", "not committed"))
+                else:
+                    why = (f"there is no reviews/{handle}/{name}/"
+                           f"{label}.json")
+                    rows.append((item_id, label, "none", "refused"))
+                refused.append(
+                    f"{item_id} {label}: {REFUSE_ABSENT} (folder digest "
+                    f"{_short(digest)}, reviewed digest none). {why}, so "
+                    f"nothing has approved the bytes this version publishes."
+                )
                 continue
             verdict = _verdict_of(found.block)
             if found.digest != digest:
-                rows.append((item_id, label, verdict, "stale, other bytes"))
+                rows.append((item_id, label, verdict, "refused, other bytes"))
+                refused.append(
+                    f"{item_id} {label}: {REFUSE_STALE} (folder digest "
+                    f"{_short(digest)}, reviewed digest "
+                    f"{_short(found.digest)}). The folder was edited after "
+                    f"the review was taken, so review it again and commit "
+                    f"the artifact."
+                )
                 continue
             overridden = is_overridden(found.block)
             note = "overridden" if overridden else "committed"
             rows.append((item_id, label, verdict, note))
             if verdict == VERDICT_BLOCKED and not overridden:
-                refused.append(f"{item_id} {label}")
+                refused.append(
+                    f"{item_id} {label}: {REFUSE_BLOCKED} (folder digest "
+                    f"{_short(digest)}, reviewed digest "
+                    f"{_short(found.digest)}). The review read these exact "
+                    f"bytes and refused them; publishing one anyway needs "
+                    f"--override-blocked \"<reason>\" written into the "
+                    f"committed review, which goes past CODEOWNERS in the "
+                    f"pull request diff."
+                )
 
     for row in rows:
         print(f"{row[0]} {row[1]}: {row[2]} ({row[3]})")
@@ -811,18 +1004,21 @@ def cmd_check_reviews(args: argparse.Namespace) -> int:
         heading="committed review verdicts",
         columns=("skill", "version", "verdict", "source"),
         note=(
-            "a `blocked` verdict with no written override refuses this build. "
-            "`stale, other bytes` means a committed review describes a "
-            "different digest, so it decides nothing and the review step "
-            "takes a fresh one."
+            "every published version needs a review committed under "
+            "`reviews/` and bound to its exact folder digest. an absent "
+            "one, one bound to other bytes, and a `blocked` one with no "
+            "written override each refuse this build."
         ),
     )
     if refused:
+        for line in refused:
+            print(f"::error::{line}", file=sys.stderr)
         print(
-            f"::error::blocked by the security review and not overridden: "
-            f"{', '.join(refused)}. A blocked version publishes only with an "
-            f"override written into its committed review under reviews/, "
-            f"which goes past CODEOWNERS in the pull request diff.",
+            f"::error::this build is refused: {len(refused)} published "
+            f"version(s) are not approved by a committed review of their "
+            f"exact bytes. A version publishes only with a review committed "
+            f"under reviews/ and bound to its folder digest. Edit the "
+            f"folder, re-run the review.",
             file=sys.stderr,
         )
         return 1
@@ -969,6 +1165,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--staged", default="",
         help="review a skill folder ON DISK that is not committed yet, which "
              "is the approval moment; the digest is computed from the folder",
+    )
+    look.add_argument(
+        "--from-index", default="",
+        help="commit the review this catalog ALREADY published for these "
+             "exact bytes, read out of the named index file. Calls no "
+             "model and refuses when the digests differ",
     )
     look.add_argument(
         "--override-blocked", default=None, metavar="REASON",

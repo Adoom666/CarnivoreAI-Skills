@@ -1,0 +1,9 @@
+{
+  "digest": "ca7b521076845803ac43b6e1582b043fd7ef0678327cac6fbf9e02a55206c45d",
+  "status": "reviewed",
+  "verdict": "clean",
+  "summary": "this skill generates a markdown table and progress bars summarizing the current session's work, based on conversation history, a local TODO.md file if present, and background tasks from the TaskList tool. it does not modify any files and is read-only.",
+  "warnings": [],
+  "model": "google/gemini-2.5-flash-lite",
+  "reviewed_at": "2026-09-19T15:10:52Z"
+}

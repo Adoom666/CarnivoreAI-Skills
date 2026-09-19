@@ -1,0 +1,9 @@
+{
+  "digest": "c2c7c419dd181326963cfe9e714e9023cdaf2a97fbf882aca49959819251aae1",
+  "status": "reviewed",
+  "verdict": "clean",
+  "summary": "this skill facilitates a multi-stage brainstorming process called '11-stars' to generate and refine ideas on a given topic. it uses a sub-agent to climb through eleven 'star' levels of ideation, with strict rules for idea progression and filtering, culminating in a salvage pass to engineer impossible ideas back toward reality. the final output is a compiled document detailing the process and the resulting ideas.",
+  "warnings": [],
+  "model": "google/gemini-2.5-flash-lite",
+  "reviewed_at": "2026-09-19T15:10:52Z"
+}
