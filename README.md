@@ -116,20 +116,50 @@ so no long lived aws credential is stored in github. every action is pinned to
 a commit sha. the index is re-signed weekly even when nothing changed, which
 bounds an undetected key compromise to a week rather than to forever.
 
-## the review is advisory and it says so
+## the review carries a verdict, and five kinds of finding block
 
-every version gets one model's read of its own text, written at publish time
-and shown in the app above the SKILL.md before anyone consents to install.
+every version gets one model's read of its own text. it answers two questions
+in the same pass, because that is the ruling: does the frontmatter description
+disclose what the body actually instructs, and does the body do anything on the
+security checklist. it returns a `verdict` of `clean`, `flagged` or `blocked`.
+
+five kinds of finding block a publish: `prompt_injection`, `credential_access`,
+`obfuscation`, `opaque_payload` and `settings_write`. each is something no
+legitimate skill in a public catalog needs to do, so a publish stops rather
+than a reader being asked to notice a warning. the other six, `network`,
+`shell_exec`, `file_delete`, `privilege`, `description_mismatch` and `other`,
+are advisory: a skill that fetches documentation or runs a command is doing its
+job, and the detail names the host or the path so a human can judge.
+
+**the verdict is re-derived, never taken on trust.** the model is asked for it
+so its answer is self consistent, and then the verdict is recomputed from the
+findings and compared. a model that lists a blocking finding and calls itself
+clean has its whole answer discarded, which records `unavailable`. the same
+re-derivation runs on a committed review when it is read, so hand editing the
+verdict in the file refuses the file rather than publishing it.
+
+**the skill text is data, not instructions to the reviewer.** it is framed by
+`=== BEGIN SKILL TEXT ===` and the prompt says so, because a skill IS
+instructions to an agent: text addressed to the reviewer is the native attack
+on this artifact class, and it is reported as `prompt_injection` rather than
+followed.
+
+**every utf-8 text member is shown, not three categories of file.** SKILL.md
+first and executables next, so the size cap falls on the least important files
+last. a file that is not text, and a file the cap left out, is named with its
+size and marked as not shown, so a payload nobody can read is a thing the
+reviewer can raise rather than a thing it never heard of.
 
 it is written after the publisher's signature has already been verified, so it
 is covered by the index key alone. an index key holder could therefore forge a
-benign review. that is why the review is never the thing that authorises an
-install: the SKILL.md text is always shown next to it and the consent button
-stays a human act.
+benign review. that is why the verdict gates the PUBLISH PIPELINE and is never
+treated by the app as proof of anything: the SKILL.md text is always shown next
+to it and the consent button stays a human act.
 
 when the review cannot be obtained, for any reason at all, the index records
-`status: "unavailable"` and no summary. the app renders that literally as "no
-ai review". a blank review must never read as a clean one.
+`status: "unavailable"` and no summary and NO VERDICT. the app renders that
+literally as "no ai review". a blank review must never read as a clean one, and
+an unavailable one is never a clean one.
 
 ## where a review lives, and when the model actually runs
 
@@ -173,6 +203,32 @@ signed. it reads the model key from `OPENROUTER_SECRET_VALUE`, and it writes
 nothing at all when the scan fails: an unavailable review is a transient
 failure, not a verdict, and committing one would leave a file a reader could
 mistake for a finding.
+
+**the approval moment is before any commit**, so the same command takes
+`--staged <folder>` and reviews a skill folder on disk, computing the digest
+from those bytes with the code the app uses. that is what
+`scripts/catalog-bootstrap/fetch_approved.py` in the app's repository runs
+after it stages an approved submission, and it prints the publish command only
+when this exits zero.
+
+**a blocked verdict exits non zero.** to publish one anyway, run it again with
+`--override-blocked "<reason>"`. the reason, who you are and the moment are
+written into the committed review as an `override` block. it NEVER changes the
+verdict: the artifact still says blocked, the card still marks the item, and
+the file sits under `reviews/`, which `CODEOWNERS` routes to the owner, so the
+override shows up in the pull request diff rather than being applied silently.
+`--require-clean` refuses anything that is not clean, not only what is blocked.
+
+**the backstop runs in `verify`, which every pull request reaches.**
+`check-reviews` reads the committed reviews for the versions just assembled and
+refuses the build when one is blocked with no well formed override, or when one
+exists and cannot be read. a gate that only lives in the script a maintainer
+runs is a gate a hand commit walks past.
+
+**a review with no verdict is stale.** everything reviewed before the verdict
+existed answered a question the gate does not ask, so neither the committed
+tree nor the live index carries one forward: those versions are reviewed once
+more under the current prompt.
 
 ## the grade is advisory too
 

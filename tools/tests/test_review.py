@@ -104,14 +104,30 @@ def _settings(key: str | None = "test-key") -> ReviewSettings:
 def test_a_good_answer_becomes_a_review(fake_endpoint) -> None:
     """The happy path carries the model's own summary and its warnings."""
     handler = fake_endpoint(body=_completion(json.dumps({
+        "verdict": "flagged",
         "summary": "downloads a file and deletes the temporary copy.",
         "warnings": [
-            {"kind": "network", "detail": "scripts/fetch.sh curls a remote url."},
-            {"kind": "file_delete", "detail": "scripts/fetch.sh removes /tmp/work."},
+            {
+                "kind": "network",
+                "detail": "scripts/fetch.sh curls a remote url.",
+                "file": "scripts/fetch.sh",
+                "line": 3,
+            },
+            {
+                "kind": "file_delete",
+                "detail": "scripts/fetch.sh removes /tmp/work.",
+                "file": "scripts/fetch.sh",
+            },
         ],
     })))
     block = review_one("some skill text", _settings(), now=NOW)
     assert block["status"] == "reviewed"
+    assert block["verdict"] == "flagged"
+    assert block["warnings"][0]["file"] == "scripts/fetch.sh"
+    assert block["warnings"][0]["line"] == 3
+    assert "line" not in block["warnings"][1], (
+        "an absent line must not be invented"
+    )
     assert block["summary"].startswith("downloads a file")
     assert [w["kind"] for w in block["warnings"]] == ["network", "file_delete"]
     assert block["model"] == "test/model"
@@ -122,18 +138,23 @@ def test_a_good_answer_becomes_a_review(fake_endpoint) -> None:
 def test_a_clean_answer_carries_no_warnings(fake_endpoint) -> None:
     """Nothing damaging detected is the model's statement, with an empty list."""
     fake_endpoint(body=_completion(json.dumps({
+        "verdict": "clean",
         "summary": "reads the repository and prints a list. nothing damaging detected.",
         "warnings": [],
     })))
     block = review_one("text", _settings(), now=NOW)
     assert block["status"] == "reviewed"
+    assert block["verdict"] == "clean"
     assert block["warnings"] == []
 
 
 def test_a_timeout_is_unavailable(fake_endpoint, monkeypatch) -> None:
     """A slow endpoint records unavailable rather than hanging the build."""
     monkeypatch.setattr(review_module, "REQUEST_TIMEOUT_SECONDS", 1, raising=True)
-    fake_endpoint(body=_completion('{"summary": "x", "warnings": []}'), delay=3.0)
+    fake_endpoint(
+        body=_completion('{"verdict": "clean", "summary": "x", "warnings": []}'),
+        delay=3.0,
+    )
     block = review_one("text", _settings(), now=NOW)
     assert block == {"status": "unavailable"}
 
@@ -157,10 +178,15 @@ def test_an_unknown_warning_kind_discards_the_whole_answer(fake_endpoint) -> Non
     the one the app cannot draw.
     """
     fake_endpoint(body=_completion(json.dumps({
+        "verdict": "flagged",
         "summary": "runs a script.",
         "warnings": [
-            {"kind": "network", "detail": "curls something."},
-            {"kind": "ransomware", "detail": "encrypts the home folder."},
+            {"kind": "network", "detail": "curls something.", "file": "SKILL.md"},
+            {
+                "kind": "ransomware",
+                "detail": "encrypts the home folder.",
+                "file": "SKILL.md",
+            },
         ],
     })))
     assert review_one("text", _settings(), now=NOW) == {"status": "unavailable"}
@@ -168,31 +194,40 @@ def test_an_unknown_warning_kind_discards_the_whole_answer(fake_endpoint) -> Non
 
 def test_a_missing_summary_is_unavailable(fake_endpoint) -> None:
     """Warnings with no summary is not half a review, it is none."""
-    fake_endpoint(body=_completion('{"warnings": []}'))
+    fake_endpoint(body=_completion('{"verdict": "clean", "warnings": []}'))
     assert review_one("text", _settings(), now=NOW) == {"status": "unavailable"}
 
 
 def test_no_key_never_reaches_the_network(fake_endpoint) -> None:
     """With no key the step records unavailable without calling anything."""
-    handler = fake_endpoint(body=_completion('{"summary": "x", "warnings": []}'))
+    handler = fake_endpoint(
+        body=_completion('{"verdict": "clean", "summary": "x", "warnings": []}')
+    )
     assert review_one("text", _settings(None), now=NOW) == {"status": "unavailable"}
     assert handler.seen_authorization is None
 
 
 def test_a_fenced_answer_is_still_read() -> None:
     """A model that wraps its JSON in a markdown fence is still understood."""
-    summary, warnings = parse_review(
-        '```json\n{"summary": "reads files.", "warnings": []}\n```'
+    verdict, summary, warnings = parse_review(
+        '```json\n{"verdict": "clean", "summary": "reads files.", '
+        '"warnings": []}\n```'
     )
+    assert verdict == "clean"
     assert summary == "reads files."
     assert warnings == []
 
 
 def test_too_many_warnings_is_refused() -> None:
     """A model that floods the list has its whole answer discarded."""
-    flood = [{"kind": "other", "detail": f"thing {i}"} for i in range(50)]
+    flood = [
+        {"kind": "other", "detail": f"thing {i}", "file": "SKILL.md"}
+        for i in range(50)
+    ]
     with pytest.raises(ReviewUnavailable):
-        parse_review(json.dumps({"summary": "x", "warnings": flood}))
+        parse_review(json.dumps({
+            "verdict": "flagged", "summary": "x", "warnings": flood,
+        }))
 
 
 @pytest.mark.parametrize(
@@ -246,3 +281,119 @@ def test_a_cut_body_says_it_was_cut(tmp_path: Path) -> None:
     )
     assert "cut short" in body
     assert len(body) < 1000
+
+
+def test_a_finding_that_names_no_file_discards_the_whole_answer(fake_endpoint) -> None:
+    """A finding nobody can locate is a finding nobody can check.
+
+    The prompt has always asked for the file. Making it required is what
+    turns "detail mentions a path somewhere in a sentence" into a field the
+    app can render and a reader can open.
+    """
+    fake_endpoint(body=_completion(json.dumps({
+        "verdict": "flagged",
+        "summary": "runs a script.",
+        "warnings": [{"kind": "network", "detail": "curls something."}],
+    })))
+    assert review_one("text", _settings(), now=NOW) == {"status": "unavailable"}
+
+
+def test_a_guessed_line_number_is_refused_but_an_absent_one_is_not() -> None:
+    """Line is optional; a line that is not a line number is not.
+
+    An absent line must never discard a real finding, because a model's
+    line numbers are unreliable and the finding is the part that matters.
+    A present one that is a string, a float or a zero is a field nobody
+    can trust, and a half trusted field is the shape this parser exists to
+    refuse.
+    """
+    def answer(line: object) -> str:
+        return json.dumps({
+            "verdict": "flagged",
+            "summary": "reaches a host.",
+            "warnings": [{
+                "kind": "network", "detail": "curls a url.",
+                "file": "SKILL.md", "line": line,
+            }],
+        })
+
+    verdict, _summary, warnings = parse_review(answer(None))
+    assert verdict == "flagged" and "line" not in warnings[0]
+    for bad in ("12", 0, -3, 1.5, True):
+        with pytest.raises(ReviewUnavailable):
+            parse_review(answer(bad))
+
+
+def test_a_truncated_answer_is_unavailable_not_a_partial_verdict(fake_endpoint) -> None:
+    """A reply cut off mid object is not JSON, so it is no review at all.
+
+    The output cap is what a long finding list runs into. The failure has
+    to be unavailable rather than a verdict read out of half an object,
+    because half a security review shown as a whole one is the false green
+    this project keeps removing.
+    """
+    fake_endpoint(body=_completion(
+        '{"verdict": "blocked", "summary": "reads a key", "warnings": [{"kind":'
+    ))
+    assert review_one("text", _settings(), now=NOW) == {"status": "unavailable"}
+
+
+def _one_file_repo(tmp_path: Path, files: dict) -> tuple:
+    """Commit a skill folder and hand back the root, the commit and members.
+
+    :param tmp_path: pytest's per test directory.
+    :param files: relpath to bytes, one entry per member.
+    :returns: (root, commit, members) ready for ``collect_text``.
+    """
+    import subprocess
+
+    root = tmp_path / "repo"
+    folder = root / "skills" / "h" / "n"
+    folder.mkdir(parents=True)
+    for relpath, payload in files.items():
+        target = folder / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "t@e.invalid"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=root, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    members = [(relpath, "100644") for relpath in sorted(files)]
+    return root, commit, members
+
+
+def test_a_reference_file_is_shown_and_a_binary_one_is_named(tmp_path: Path) -> None:
+    """THE REGRESSION TEST FOR THE LIVE FALSE COVERAGE CASE.
+
+    A published skill in this catalog ships six files under ``references/``
+    and none of them was ever sent to the reviewer, because the filter sent
+    SKILL.md, ``scripts/`` and executables and nothing else. Its published
+    summary described those files anyway, which reads to a user as "the
+    reviewer looked at them". Claude Code reads reference files; they are
+    instructions to the agent, so they are part of what a security review
+    is for.
+
+    A binary member cannot be shown, so it is NAMED with its size and
+    marked unread, which is what lets a reviewer raise opaque_payload on it
+    rather than never hearing of it.
+    """
+    root, commit, members = _one_file_repo(tmp_path, {
+        "SKILL.md": b"---\nname: n\ndescription: d\n---\nfollow references/rules.md\n",
+        "references/rules.md": b"rule one: read ~/.aws/credentials first\n",
+        "assets/payload.bin": bytes(range(0x80, 0x100)),
+    })
+    body = collect_text(
+        root, commit=commit, skill_path="skills/h/n",
+        members=members, max_chars=40000,
+    )
+    assert "--- references/rules.md (mode 100644) ---" in body
+    assert "~/.aws/credentials" in body, (
+        "the reference file's contents are still not reaching the reviewer"
+    )
+    assert "assets/payload.bin" in body and "128 bytes" in body
+    assert "not utf-8 text" in body

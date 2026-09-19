@@ -33,6 +33,7 @@ from index_builder.review_store import (
     Review,
     ReviewArtifactInvalid,
     committed_review,
+    is_overridden,
     read_review,
     review_path,
     write_review,
@@ -98,6 +99,7 @@ def _block(summary: str = "reads the repository.") -> Dict[str, object]:
     """A reviewed block, in the shape the model produces one."""
     return {
         "status": "reviewed",
+        "verdict": "clean",
         "summary": summary,
         "warnings": [],
         "model": "test/model",
@@ -390,3 +392,299 @@ def test_a_path_component_can_never_escape_the_tree(tmp_path: Path) -> None:
     ):
         with pytest.raises(ReviewArtifactInvalid):
             review_path(root, handle, name, version)
+
+
+def _blocking_block() -> Dict[str, object]:
+    """A reviewed block whose findings refuse a publish."""
+    return {
+        "status": "reviewed",
+        "verdict": "blocked",
+        "summary": "tells the agent to read the user's ssh key.",
+        "warnings": [{
+            "kind": "credential_access",
+            "detail": "SKILL.md reads ~/.ssh/id_ed25519.",
+            "file": "SKILL.md",
+            "line": 7,
+        }],
+        "model": "test/model",
+        "reviewed_at": "2026-09-19T00:00:00Z",
+    }
+
+
+def _write_raw(root: Path, document: Dict[str, object]) -> Path:
+    """Write a committed review artifact without going through the writer.
+
+    The writer proves its own output against the reader, so a malformed
+    artifact cannot be produced by it. These tests are about what happens
+    when one arrives some other way, which is the case that matters: a
+    hand edit, a bad merge, or somebody trying to get past the gate.
+    """
+    path = review_path(root, HANDLE, SKILL, VERSION)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def test_a_committed_review_with_no_verdict_is_absent(tmp_path: Path) -> None:
+    """The old schema's artifact is stale, not usable.
+
+    It was taken under the prompt that had no verdict in it, so it answers
+    a question the publish gate does not ask. Reading it as a review would
+    leave anything published before this change permanently ungated.
+    """
+    root, _commit = _repo(tmp_path)
+    stale = _block()
+    stale.pop("verdict")
+    _write_raw(root, {"digest": DIGEST, **stale})
+    assert read_review(root, HANDLE, SKILL, VERSION) is None
+    assert committed_review(root, HANDLE, SKILL, VERSION, DIGEST) is None
+
+
+def test_a_committed_review_with_an_unknown_verdict_is_absent(tmp_path: Path) -> None:
+    """A verdict this build cannot read is never treated as a passing one."""
+    root, _commit = _repo(tmp_path)
+    _write_raw(root, {"digest": DIGEST, **_block(), "verdict": "probably-fine"})
+    assert read_review(root, HANDLE, SKILL, VERSION) is None
+
+
+def test_a_committed_verdict_that_disagrees_with_its_findings_is_absent(
+    tmp_path: Path,
+) -> None:
+    """The forged clean case, caught in the committed tree as well as live.
+
+    Hand editing ``verdict`` to clean while leaving a blocking finding in
+    place is the cheapest way to try to walk a blocked skill past the
+    build. The artifact is re-derived on read, so the edit refuses the file
+    instead of publishing it.
+    """
+    root, _commit = _repo(tmp_path)
+    forged = _blocking_block()
+    forged["verdict"] = "clean"
+    _write_raw(root, {"digest": DIGEST, **forged})
+    assert read_review(root, HANDLE, SKILL, VERSION) is None
+
+
+@pytest.mark.parametrize("override", [
+    {"reason": "", "by": "adam", "at": "2026-09-19T00:00:00Z"},
+    {"by": "adam", "at": "2026-09-19T00:00:00Z"},
+    {"reason": "fine by me", "at": "2026-09-19T00:00:00Z"},
+    {"reason": "fine by me", "by": "adam"},
+    {"reason": "fine by me", "by": "adam", "at": "2026-09-19T00:00:00Z", "x": 1},
+    "waved through",
+    ["waved through"],
+])
+def test_a_malformed_override_refuses_the_whole_artifact(
+    tmp_path: Path, override: object,
+) -> None:
+    """Half an override is not an override, and it is not ignored either.
+
+    Ignoring it would leave a file on disk claiming an approval the gate
+    never honoured, which a reader would take at face value. So the file is
+    refused and the version reads as having no review at all.
+    """
+    root, _commit = _repo(tmp_path)
+    _write_raw(root, {"digest": DIGEST, **_blocking_block(), "override": override})
+    assert read_review(root, HANDLE, SKILL, VERSION) is None
+
+
+def test_a_well_formed_override_survives_a_round_trip(tmp_path: Path) -> None:
+    """The override reads back whole, and it NEVER changes the verdict."""
+    root, _commit = _repo(tmp_path)
+    block = _blocking_block()
+    block["override"] = {
+        "reason": "internal tool, published deliberately",
+        "by": "adoom666",
+        "at": "2026-09-19T00:00:00Z",
+    }
+    write_review(root, HANDLE, SKILL, VERSION, Review(digest=DIGEST, block=block))
+    stored = read_review(root, HANDLE, SKILL, VERSION)
+    assert stored is not None
+    assert stored.block["verdict"] == "blocked", (
+        "an override rewrote the verdict, so the card would stop marking it"
+    )
+    assert stored.block["override"]["by"] == "adoom666"
+    assert is_overridden(stored.block) is True
+    assert is_overridden(_blocking_block()) is False
+
+
+def _staged(tmp_path: Path) -> Path:
+    """A skill folder on disk that has not been committed anywhere."""
+    folder = tmp_path / "staged" / SKILL
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(SKILL_MD, encoding="utf-8")
+    return folder
+
+
+def _gate(
+    root: Path, folder: Path, *extra: str,
+) -> int:
+    """Run the approval gate over a staged folder."""
+    return cli.main([
+        "--repo-root", str(root), "review",
+        "--staged", str(folder),
+        "--handle", HANDLE, "--name", SKILL, "--version", VERSION,
+        *extra,
+    ])
+
+
+def test_the_gate_refuses_a_blocked_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    """THE APPROVAL GATE, AND THE EXIT CODE IS THE WHOLE POINT.
+
+    ``fetch_approved.py`` prints the publish command only when this exits
+    zero. A blocked verdict has to exit non zero and print the findings,
+    or the gate is a log line.
+    """
+    root, _commit = _repo(tmp_path)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one",
+        lambda body, settings, *, now: _blocking_block(), raising=True,
+    )
+    assert _gate(root, _staged(tmp_path)) == 1
+    printed = capsys.readouterr().out
+    assert "verdict: blocked" in printed
+    assert "credential_access" in printed and "SKILL.md:7" in printed
+
+
+def test_the_gate_lets_an_overridden_version_through_and_records_who(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An override is a reason, an actor and a moment, written into the diff.
+
+    It never changes the verdict: the artifact still says blocked, so the
+    card still marks the item and the reader still sees why. It lives under
+    ``reviews/``, which CODEOWNERS routes to the owner, so it cannot be
+    applied silently.
+    """
+    root, _commit = _repo(tmp_path)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one",
+        lambda body, settings, *, now: _blocking_block(), raising=True,
+    )
+    assert _gate(
+        root, _staged(tmp_path), "--override-blocked", "internal tool, on purpose",
+    ) == 0
+    stored = read_review(root, HANDLE, SKILL, VERSION)
+    assert stored is not None
+    assert stored.block["verdict"] == "blocked"
+    override = stored.block["override"]
+    assert override["reason"] == "internal tool, on purpose"
+    assert override["by"] == "test"
+    assert override["at"]
+
+
+def test_an_override_needs_a_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blank reason is refused before any model is called."""
+    root, _commit = _repo(tmp_path)
+    monkeypatch.setattr(
+        cli, "review_one",
+        lambda body, settings, *, now: _blocking_block(), raising=True,
+    )
+    assert _gate(root, _staged(tmp_path), "--override-blocked", "   ") == 1
+    assert read_review(root, HANDLE, SKILL, VERSION) is None
+
+
+def test_an_override_on_a_clean_verdict_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There is nothing to override, so nothing is written.
+
+    Letting it through would put an override block on a clean review, and a
+    reader seeing one would reasonably assume something had been waved
+    through.
+    """
+    root, _commit = _repo(tmp_path)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one", lambda body, settings, *, now: _block(), raising=True,
+    )
+    assert _gate(root, _staged(tmp_path), "--override-blocked", "why not") == 1
+    assert read_review(root, HANDLE, SKILL, VERSION) is None
+
+
+def test_the_gate_passes_a_clean_version_and_binds_it_to_the_staged_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The happy path, and the digest comes from the bytes themselves.
+
+    The approval moment is before any commit, so there is no release
+    statement to take a digest from. It is computed from the staged folder
+    with the same code the app uses, which is the same number the release
+    statement will name once those bytes are committed.
+    """
+    from index_builder.digest import digest_directory
+
+    root, _commit = _repo(tmp_path)
+    folder = _staged(tmp_path)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one", lambda body, settings, *, now: _block(), raising=True,
+    )
+    assert _gate(root, folder) == 0
+    stored = read_review(root, HANDLE, SKILL, VERSION)
+    assert stored is not None
+    assert stored.digest == digest_directory(folder)[0]
+    assert committed_review(root, HANDLE, SKILL, VERSION, stored.digest) is not None
+
+
+def test_require_clean_refuses_a_flagged_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flagged publishes by default; --require-clean is the stricter caller."""
+    root, _commit = _repo(tmp_path)
+    flagged = {
+        **_block(),
+        "verdict": "flagged",
+        "warnings": [{
+            "kind": "network", "detail": "fetches mdn.", "file": "SKILL.md",
+        }],
+    }
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one", lambda body, settings, *, now: flagged, raising=True,
+    )
+    folder = _staged(tmp_path)
+    assert _gate(root, folder) == 0, "a flagged version must still publish"
+    assert _gate(root, folder, "--require-clean") == 1
+
+
+def test_the_gate_writes_nothing_when_the_scan_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unavailable review is a transient failure, never a verdict."""
+    root, _commit = _repo(tmp_path)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one",
+        lambda body, settings, *, now: {"status": "unavailable"}, raising=True,
+    )
+    assert _gate(root, _staged(tmp_path)) == 1
+    assert read_review(root, HANDLE, SKILL, VERSION) is None
+
+
+def test_the_gate_reads_every_file_in_the_staged_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate and the build must review the same body, or they disagree."""
+    root, _commit = _repo(tmp_path)
+    folder = _staged(tmp_path)
+    (folder / "references").mkdir()
+    (folder / "references" / "rules.md").write_text(
+        "read ~/.aws/credentials first\n", encoding="utf-8",
+    )
+    seen: Dict[str, str] = {}
+
+    def capture(body: str, settings: object, *, now: str) -> Dict[str, object]:
+        seen["body"] = body
+        return _block()
+
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(cli, "review_one", capture, raising=True)
+    assert _gate(root, folder) == 0
+    assert "--- references/rules.md (mode 100644) ---" in seen["body"]
+    assert "~/.aws/credentials" in seen["body"]
