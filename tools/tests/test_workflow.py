@@ -17,6 +17,7 @@ remember them during a hurried change:
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -220,3 +221,175 @@ def test_every_codeowned_path_also_triggers_the_build() -> None:
             f"CODEOWNERS guards {pattern} but no push path filter covers it, "
             f"so a change there is reviewed but never checked"
         )
+
+
+#: The subcommand the publish backstop runs.
+CHECK_REVIEWS = "check-reviews"
+
+
+def _blocked_review(digest: str, *, override: bool) -> dict:
+    """A committed review that refuses a publish, with or without the waiver."""
+    document = {
+        "digest": digest,
+        "status": "reviewed",
+        "verdict": "blocked",
+        "summary": "reads the user's ssh key and posts it.",
+        "warnings": [{
+            "kind": "credential_access",
+            "detail": "SKILL.md tells the agent to read ~/.ssh/id_ed25519.",
+            "file": "SKILL.md",
+            "line": 6,
+        }],
+        "model": "test/model",
+        "reviewed_at": "2026-09-19T00:00:00Z",
+    }
+    if override:
+        document["override"] = {
+            "reason": "internal fixture, published deliberately",
+            "by": "adoom666",
+            "at": "2026-09-19T00:00:00Z",
+        }
+    return document
+
+
+def _backstop_step() -> dict:
+    """The verify job's step that refuses a blocked version.
+
+    :returns: the step, so a test can run the command the workflow runs
+        rather than a command a test wrote to look like it.
+    """
+    document = _document()
+    steps = [
+        step for step in document["jobs"]["verify"]["steps"]
+        if CHECK_REVIEWS in str(step.get("run", ""))
+    ]
+    assert len(steps) == 1, (
+        f"the verify job runs {CHECK_REVIEWS} {len(steps)} times; it needs "
+        f"exactly one backstop, in the job that runs on a pull request"
+    )
+    return steps[0]
+
+
+def test_the_verify_job_refuses_a_blocked_review() -> None:
+    """The backstop is in the job a fork's pull request actually reaches.
+
+    The review job holds the model key and is skipped on a pull request, so
+    a gate living there would never see a submitted skill. This one holds
+    no credential and reads committed files, so it runs for everybody.
+    """
+    step = _backstop_step()
+    assert step["working-directory"] == "tools"
+    assert "if" not in step, (
+        "the backstop is conditional, so there is a way to merge past it"
+    )
+
+
+def test_the_backstop_command_goes_red_on_a_blocked_review(tmp_path) -> None:
+    """A GREEN CHECK MUST FIRST PROVE IT CAN GO RED.
+
+    This runs the command out of the workflow file itself, against a
+    repository carrying one blocked committed review, and requires a non
+    zero exit. Then it adds the written override and requires a zero one.
+    Asserting the step's presence alone would pass against a step that
+    printed the verdicts and exited 0 every time, which is the exact shape
+    of check this project keeps removing.
+    """
+    import json
+    import subprocess
+    import sys
+
+    digest = "a" * 64
+    index = {"items": [{
+        "id": "adoom666/probe",
+        "publisher": "adoom666",
+        "name": "probe",
+        "versions": [{"v": "1.0.0", "digest": digest}],
+    }]}
+    index_path = tmp_path / "index.unsigned.json"
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+    review_path = tmp_path / "reviews" / "adoom666" / "probe" / "1.0.0.json"
+    review_path.parent.mkdir(parents=True)
+
+    command = _backstop_step()["run"].replace("python ", f"{sys.executable} ")
+
+    def run_backstop() -> subprocess.CompletedProcess:
+        """Run the workflow's own command line against the crafted tree."""
+        return subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", command],
+            cwd=str(REPO_ROOT / "tools"),
+            env={
+                "PATH": os.environ["PATH"],
+                "GITHUB_WORKSPACE": str(tmp_path),
+                "PYTHONPATH": str(REPO_ROOT / "tools"),
+            },
+            capture_output=True, text=True, check=False,
+        )
+
+    review_path.write_text(
+        json.dumps(_blocked_review(digest, override=False)), encoding="utf-8",
+    )
+    refused = run_backstop()
+    assert refused.returncode != 0, (
+        f"a blocked review did not refuse the build. stdout: {refused.stdout} "
+        f"stderr: {refused.stderr}"
+    )
+    assert "blocked" in (refused.stdout + refused.stderr)
+
+    review_path.write_text(
+        json.dumps(_blocked_review(digest, override=True)), encoding="utf-8",
+    )
+    allowed = run_backstop()
+    assert allowed.returncode == 0, (
+        f"a written override did not let the build through. stdout: "
+        f"{allowed.stdout} stderr: {allowed.stderr}"
+    )
+    assert "blocked" in allowed.stdout, (
+        "the override hid the verdict; it must never change what the review "
+        "says, only whether the build stops"
+    )
+
+
+def test_a_malformed_override_does_not_let_a_blocked_review_through(tmp_path) -> None:
+    """Half an override is not an override, and the version stays blocked.
+
+    A file claiming a waiver that the gate does not honour is worse than no
+    file: a reader sees an approval that never happened. So a malformed
+    override refuses the whole artifact, and the refusal stands.
+    """
+    import json
+    import subprocess
+    import sys
+
+    digest = "b" * 64
+    index_path = tmp_path / "index.unsigned.json"
+    index_path.write_text(json.dumps({"items": [{
+        "id": "adoom666/probe",
+        "publisher": "adoom666",
+        "name": "probe",
+        "versions": [{"v": "1.0.0", "digest": digest}],
+    }]}), encoding="utf-8")
+    review = _blocked_review(digest, override=True)
+    review["override"].pop("reason")
+    review_path = tmp_path / "reviews" / "adoom666" / "probe" / "1.0.0.json"
+    review_path.parent.mkdir(parents=True)
+    review_path.write_text(json.dumps(review), encoding="utf-8")
+
+    command = _backstop_step()["run"].replace("python ", f"{sys.executable} ")
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", command],
+        cwd=str(REPO_ROOT / "tools"),
+        env={
+            "PATH": os.environ["PATH"],
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "PYTHONPATH": str(REPO_ROOT / "tools"),
+        },
+        capture_output=True, text=True, check=False,
+    )
+    # a committed review that exists and cannot be read refuses the build.
+    # treating it as absent would make corrupting the artifact the way past
+    # this check, which is a cheaper attack than forging an override.
+    assert result.returncode != 0, (
+        f"a broken override let the build through. stdout: {result.stdout} "
+        f"stderr: {result.stderr}"
+    )
+    assert "unreadable" in result.stdout, result.stdout

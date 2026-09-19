@@ -55,12 +55,29 @@ from .review import (
     MAX_WARNINGS,
     STATUS_REVIEWED,
     STATUS_UNAVAILABLE,
+    VERDICTS,
+    VERDICT_BLOCKED,
     WARNING_KINDS,
+    check_verdict,
+    normalise_finding,
 )
+from .review import ReviewUnavailable
 from .statements import DIGEST_RE
 
 #: Where committed reviews live, mirroring ``releases/`` one level out.
 REVIEWS_DIR = "reviews"
+
+#: The block a human writes when a blocked version is published anyway. It
+#: NEVER changes the verdict: the card still marks the item and the reader
+#: still sees why. It lives in the committed artifact, under CODEOWNERS, so
+#: the override shows up in a pull request diff rather than being applied
+#: silently by whoever ran the gate.
+OVERRIDE_FIELD = "override"
+
+#: Exactly the three keys an override carries. A missing one, an empty one
+#: or an extra one is a malformed override, and a malformed override is not
+#: an override: the version stays blocked.
+OVERRIDE_KEYS = ("reason", "by", "at")
 
 #: The field that binds a review to the bytes it read. It is not part of the
 #: index's review block; it is what decides whether that block may be used.
@@ -189,23 +206,94 @@ def parse_artifact(raw: object, where: str) -> Review:
         detail = entry.get("detail")
         if kind not in WARNING_KINDS:
             raise ReviewArtifactInvalid(
-                f"{where}: the warning kind {kind!r} is not one of the seven "
+                f"{where}: the warning kind {kind!r} is not one of the eleven "
                 f"the app can render"
             )
         if not isinstance(detail, str) or not detail.strip():
             raise ReviewArtifactInvalid(f"{where}: a warning carries no detail")
         assert isinstance(kind, str)
-        warnings.append({"kind": kind, "detail": detail.strip()[:MAX_DETAIL_CHARS]})
+        try:
+            warnings.append(normalise_finding(kind, detail, entry))
+        except ReviewUnavailable as exc:
+            raise ReviewArtifactInvalid(f"{where}: {exc}") from exc
 
-    return Review(
-        digest=digest,
-        block={
-            "status": STATUS_REVIEWED,
-            "summary": summary.strip()[:MAX_SUMMARY_CHARS],
-            "warnings": warnings,
-            "model": model.strip(),
-            "reviewed_at": reviewed_at.strip(),
-        },
+    try:
+        verdict = check_verdict(raw.get("verdict"), warnings)
+    except ValueError as exc:
+        raise ReviewArtifactInvalid(
+            f"{where}: {exc}, so this file is not a review anything may be "
+            f"published on"
+        ) from exc
+
+    block: Dict[str, object] = {
+        "status": STATUS_REVIEWED,
+        "verdict": verdict,
+        "summary": summary.strip()[:MAX_SUMMARY_CHARS],
+        "warnings": warnings,
+        "model": model.strip(),
+        "reviewed_at": reviewed_at.strip(),
+    }
+    override = parse_override(raw.get(OVERRIDE_FIELD), where)
+    if override is not None:
+        block[OVERRIDE_FIELD] = override
+    return Review(digest=digest, block=block)
+
+
+def parse_override(raw: object, where: str) -> Optional[Dict[str, str]]:
+    """Read the human override on a blocked review, or refuse it.
+
+    Description: absent is the normal case and returns None. PRESENT AND
+      MALFORMED IS REFUSED, never ignored, because an override is the one
+      thing that lets a blocked version publish: treating a broken one as
+      absent would be the safe direction for the build and the WRONG
+      direction for the reader, who would see a file claiming an approval
+      the gate never honoured. All three keys, all non empty strings, and
+      nothing else.
+    Inputs: raw (object) - whatever was in the override field. where (str)
+      - the path, for the message.
+    Output: the override, or None when there is none.
+    Raises: ReviewArtifactInvalid naming which rule it broke.
+    Example: parse_override({"reason": "internal", "by": "adam",
+      "at": "2026-09-19T00:00:00Z"}, "p")
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ReviewArtifactInvalid(f"{where}: {OVERRIDE_FIELD} is not an object")
+    extra = sorted(set(raw) - set(OVERRIDE_KEYS))
+    if extra:
+        raise ReviewArtifactInvalid(
+            f"{where}: {OVERRIDE_FIELD} carries {', '.join(extra)}, which is "
+            f"not one of {', '.join(OVERRIDE_KEYS)}"
+        )
+    override: Dict[str, str] = {}
+    for field in OVERRIDE_KEYS:
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ReviewArtifactInvalid(
+                f"{where}: {OVERRIDE_FIELD} carries no {field}, so nobody can "
+                f"tell who waved this through or why"
+            )
+        override[field] = value.strip()
+    return override
+
+
+def is_overridden(block: Dict[str, object]) -> bool:
+    """Whether a blocked review carries a well formed human override.
+
+    Description: the one question the publish gate asks of a blocked
+      version. Reads the block a parse already validated, so a malformed
+      override never reaches here: it refused the whole file.
+    Inputs: block (dict) - a parsed review block.
+    Output: bool.
+    Example: is_overridden({"verdict": "blocked", "override": {...}}) -> True
+    """
+    override = block.get(OVERRIDE_FIELD)
+    if not isinstance(override, dict):
+        return False
+    return all(
+        isinstance(override.get(field), str) and override.get(field, "").strip()
+        for field in OVERRIDE_KEYS
     )
 
 
@@ -263,6 +351,13 @@ def committed_review(
     """
     found = read_review(repo_root, handle, name, version)
     if found is None:
+        return None
+    if found.block.get("status") == STATUS_REVIEWED and (
+        found.block.get("verdict") not in VERDICTS
+    ):
+        # unreachable through parse_artifact, which requires a verdict. kept
+        # because this is the function the build trusts, and a reviewed block
+        # with no verdict must never be published as a gated one.
         return None
     if not digest or found.digest != digest:
         print(

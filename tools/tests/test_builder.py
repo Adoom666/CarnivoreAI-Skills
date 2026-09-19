@@ -257,7 +257,8 @@ def test_a_live_review_is_reused_for_the_same_digest() -> None:
     live = {"items": [{
         "id": "adoom666/work",
         "versions": [{"digest": "a" * 64, "review": {
-            "status": "reviewed", "summary": "reads files", "warnings": [],
+            "status": "reviewed", "verdict": "clean",
+            "summary": "reads files", "warnings": [],
             "model": "m", "reviewed_at": "2026-09-01T00:00:00Z",
         }}],
     }]}
@@ -460,8 +461,13 @@ def test_the_review_subcommand_commits_a_review_bound_to_the_verified_digest(
         seen["body"] = body
         return {
             "status": "reviewed",
+            "verdict": "flagged",
             "summary": "reads the repository and says what is free.",
-            "warnings": [{"kind": "other", "detail": "reads the issue list."}],
+            "warnings": [{
+                "kind": "other",
+                "detail": "reads the issue list.",
+                "file": "SKILL.md",
+            }],
             "model": "test/model",
             "reviewed_at": now,
         }

@@ -9,7 +9,11 @@ Run as ``python -m index_builder <command>`` from the ``tools`` directory.
             review already COMMITTED under reviews/ for the same bytes, then
             one the live index already published, and calling the model only
             for a version that has neither. With --handle, --name and
-            --version it instead reviews ONE version and commits the artifact.
+            --version it instead reviews ONE version and commits the artifact,
+            and exits non zero when that version's verdict is blocked.
+  check-reviews  refuse the build when a version's committed review is
+            blocked with no written override. Holds no credential and calls
+            no model, so it runs on a pull request from anybody.
   sign      sign the index with the key from Secrets Manager, or SKIP.
   marketplace  write, or prove fresh, the .claude-plugin/marketplace.json the
             `claude plugin marketplace add` command reads.
@@ -33,6 +37,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .assemble import assemble, write_index
+from .digest import digest_directory
 from .config import load_config
 from .gate import changed_paths, gate_report
 from .marketplace import (
@@ -52,13 +57,26 @@ from .releases import (
     verify_release,
 )
 from .review import (
+    VERDICT_BLOCKED,
+    VERDICT_CLEAN,
     ReviewSettings,
     api_key_from_secret,
+    collect_staged_text,
     collect_text,
     existing_review,
     review_one,
 )
-from .review_store import Review, committed_review, write_review
+from .review_store import (
+    OVERRIDE_FIELD,
+    OVERRIDE_KEYS,
+    Review,
+    ReviewArtifactInvalid,
+    committed_review,
+    is_overridden,
+    read_review,
+    review_path,
+    write_review,
+)
 from .serial import SerialRefused, decide_serial, decision_lines
 from .sign import SigningFailed, SigningSkipped, sign_index
 
@@ -263,38 +281,48 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def _write_job_summary(rows: Sequence[Tuple[str, str, str]]) -> None:
-    """Record which source answered for each version, where a human reads it.
+def _write_job_summary(
+    rows: Sequence[Tuple[str, ...]], *,
+    heading: str = "security review",
+    columns: Sequence[str] = ("skill", "version", "review came from", "verdict"),
+    note: str = (
+        "`committed` is a review already in the repository under `reviews/`, "
+        "`live index` is one this catalog already published for the same "
+        "bytes, and `model` means a model call was made for it on this run. "
+        "`blocked` refuses the publish unless the committed review carries a "
+        "written override."
+    ),
+) -> None:
+    """Record what happened to each version, where a human reads it.
 
     Description: appends a markdown table to the job summary, so the build
-      page says whether a model actually ran and for which versions. A step
-      log is collapsed by default and scrolls away; the summary survives.
-      Does nothing at all when GITHUB_STEP_SUMMARY is unset, which is every
-      local run and every test.
-    Inputs: rows (sequence of (item id, version, source)).
+      page says whether a model actually ran, for which versions, and what
+      it decided. A step log is collapsed by default and scrolls away; the
+      summary survives. Does nothing at all when GITHUB_STEP_SUMMARY is
+      unset, which is every local run and every test. ONE WRITER, two
+      callers: the review step and the publish gate print different columns
+      of the same shape, and a second writer would be a second format to
+      keep in step.
+    Inputs: rows (sequence of tuples, one cell per column). heading (str).
+      columns (sequence of str). note (str) - the sentence under the table.
     Output: None.
-    Example: _write_job_summary([("adoom666/sme", "1.0.0", "committed")])
+    Example: _write_job_summary([("adoom666/sme", "1.0.0", "committed",
+      "clean")])
     """
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not path:
         return
     lines = [
-        "### security review",
+        f"### {heading}",
         "",
-        "| skill | version | review came from |",
-        "|---|---|---|",
+        "| " + " | ".join(columns) + " |",
+        "|" + "---|" * len(columns),
     ]
-    for item_id, version, source in rows:
-        lines.append(f"| {item_id} | {version} | {source} |")
+    for row in rows:
+        lines.append("| " + " | ".join(str(cell) for cell in row) + " |")
     if not rows:
-        lines.append("| none | | this build listed no versions |")
-    lines.extend([
-        "",
-        "`committed` is a review already in the repository under `reviews/`, "
-        "`live index` is one this catalog already published for the same "
-        "bytes, and `model` means a model call was made for it on this run.",
-        "",
-    ])
+        lines.append("| none |" + " |" * (len(columns) - 1))
+    lines.extend(["", note, ""])
     try:
         with open(path, "a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
@@ -302,6 +330,20 @@ def _write_job_summary(rows: Sequence[Tuple[str, str, str]]) -> None:
         # reporting, never a gate. a build must not fail because a log file
         # could not be appended to.
         print(f"::warning::could not write the job summary: {exc}")
+
+
+def _verdict_of(block: Dict[str, object]) -> str:
+    """What one review block decided, in one word for a table.
+
+    Description: an unavailable review has NO verdict and must never read
+      as a clean one, so it prints ``none`` rather than an empty cell a
+      reader would skim past.
+    Inputs: block (dict) - a review block.
+    Output: str - the verdict, or ``none``.
+    Example: _verdict_of({"status": "reviewed", "verdict": "clean"}) -> "clean"
+    """
+    verdict = block.get("verdict")
+    return str(verdict) if isinstance(verdict, str) and verdict else "none"
 
 
 def _review_settings(root: Path) -> ReviewSettings:
@@ -344,12 +386,13 @@ def cmd_review(args: argparse.Namespace) -> int:
     Naming neither set, or half of one, is refused rather than guessed at:
     the two do different things to different files.
     """
-    single = bool(args.handle or args.name or args.version)
+    single = bool(args.handle or args.name or args.version or args.staged)
     if single:
         if not (args.handle and args.name and args.version):
             print(
                 "::error::--handle, --name and --version go together; name "
-                "all three to review one version",
+                "all three to review one version. --staged needs them too, "
+                "because they are where the artifact is written",
                 file=sys.stderr,
             )
             return 1
@@ -410,7 +453,7 @@ def _review_index(args: argparse.Namespace) -> int:
 
     now = _now()
     counts = {"committed": 0, "live": 0, "model": 0, "unavailable": 0}
-    rows: List[Tuple[str, str, str]] = []
+    rows: List[Tuple[str, ...]] = []
 
     for item in document.get("items", []):
         item_id = item.get("id", "")
@@ -425,14 +468,14 @@ def _review_index(args: argparse.Namespace) -> int:
             if saved is not None:
                 version["review"] = saved
                 counts["committed"] += 1
-                rows.append((item_id, label, "committed"))
+                rows.append((item_id, label, "committed", _verdict_of(saved)))
                 continue
 
             carried = existing_review(live, item_id, digest)
             if carried is not None:
                 version["review"] = carried
                 counts["live"] += 1
-                rows.append((item_id, label, "live index"))
+                rows.append((item_id, label, "live index", _verdict_of(carried)))
                 continue
 
             commit = version.get("src", {}).get("commit", "")
@@ -444,7 +487,7 @@ def _review_index(args: argparse.Namespace) -> int:
                 )
                 version["review"] = {"status": "unavailable"}
                 counts["unavailable"] += 1
-                rows.append((item_id, label, "unavailable"))
+                rows.append((item_id, label, "unavailable", "none"))
                 continue
             body = collect_text(
                 root,
@@ -457,10 +500,10 @@ def _review_index(args: argparse.Namespace) -> int:
             version["review"] = block
             if block["status"] == "reviewed":
                 counts["model"] += 1
-                rows.append((item_id, label, "model"))
+                rows.append((item_id, label, "model", _verdict_of(block)))
             else:
                 counts["unavailable"] += 1
-                rows.append((item_id, label, "unavailable"))
+                rows.append((item_id, label, "unavailable", "none"))
 
     write_index(document, Path(args.out))
     print(
@@ -473,24 +516,92 @@ def _review_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _override_actor(root: Path) -> str:
+    """Name who is waving a blocked version through.
+
+    Description: an override that cannot say WHO is not an override, so
+      this refuses rather than writing ``unknown``. Read from the
+      repository's own git identity first, because that is the name that
+      will be on the commit carrying the file, then from the environment.
+    Inputs: root (Path) - the catalog checkout.
+    Output: str - the actor's name.
+    Raises: RuntimeError when neither source names anybody.
+    Example: _override_actor(Path(".")) -> "Adoom666"
+    """
+    result = subprocess.run(
+        ["git", "-C", str(root), "config", "user.name"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    for variable in ("GITHUB_ACTOR", "USER", "LOGNAME"):
+        value = os.environ.get(variable, "").strip()
+        if value:
+            return value
+    raise RuntimeError(
+        "nothing here names who is overriding: set git config user.name in "
+        "the catalog checkout, or export USER"
+    )
+
+
+def _print_findings(block: Dict[str, object]) -> None:
+    """Print a review's verdict and every finding under it.
+
+    Description: what an operator reads INSTEAD of the publish command
+      when a version is blocked. One line per finding, naming the kind,
+      the file, the line when the model was sure of one, and the sentence.
+    Inputs: block (dict) - a reviewed block.
+    Output: None.
+    Example: _print_findings({"verdict": "blocked", "warnings": [...]})
+    """
+    print(f"verdict: {_verdict_of(block)}")
+    summary = block.get("summary")
+    if isinstance(summary, str) and summary:
+        print(f"summary: {summary}")
+    warnings = block.get("warnings")
+    if not isinstance(warnings, list) or not warnings:
+        print("findings: none")
+        return
+    print(f"findings: {len(warnings)}")
+    for entry in warnings:
+        if not isinstance(entry, dict):
+            continue
+        where = str(entry.get("file", "?"))
+        line = entry.get("line")
+        if isinstance(line, int):
+            where = f"{where}:{line}"
+        print(f"  {entry.get('kind')}  {where}  {entry.get('detail')}")
+
+
 def _review_one_version(args: argparse.Namespace) -> int:
     """Review ONE version and commit the artifact under ``reviews/``.
 
     :param args: the parsed command line, carrying handle, name and version.
-    :returns: 0 when a review was written, 1 when none was.
+    :returns: 0 when the version may be published, 1 when it may not.
 
-    THIS IS THE EXACT CALL THE APPROVAL ENDPOINT WILL MAKE. Adam's ruling of
-    2026-09-16 is that approving a submitted skill is what triggers the AI
-    work: the approve step runs the scan ONCE against the bytes it is about
-    to publish and commits the result beside the release. That endpoint is
-    not built yet, so this command is also the operation a maintainer runs
-    by hand to backfill a version the build would otherwise review again.
+    THIS IS THE APPROVAL GATE. Adam's ruling of 2026-09-16 is that
+    approving a submitted skill is what triggers the AI work, and the
+    ruling of 2026-09-19 is that the same single pass answers the
+    description question and the security checklist together and returns a
+    VERDICT the publish is gated on. ``fetch_approved.py`` runs this
+    against the bytes it just staged and refuses to print the publish
+    command when it exits non zero.
 
-    THE DIGEST COMES FROM THE VERIFIED RELEASE, NEVER FROM AN ARGUMENT. The
-    release statement is verified first, with the same code the build uses,
-    and the review is bound to the digest that verification produced. So a
-    review can never be committed for bytes no publisher signed, and a
-    version that does not verify refuses here rather than being mislabelled.
+    TWO SOURCES OF BYTES, AND THE VERDICT IS THE SAME EITHER WAY. With
+    ``--staged`` the bytes are a folder on disk that has not been committed
+    yet, which is the approval moment; the digest is computed from that
+    folder with the same code the app uses. Without it the release
+    statement is verified first and the review is bound to the digest THAT
+    produced, so a review can never be committed for bytes no publisher
+    signed.
+
+    A BLOCKED VERDICT EXITS NON ZERO UNLESS A HUMAN OVERRODE IT.
+    ``--override-blocked`` takes the reason, requires it to be a real
+    sentence, prints the findings it is waving through and writes the
+    reason, the actor and the moment into the committed artifact. IT NEVER
+    CHANGES THE VERDICT: the artifact still says blocked, the card still
+    marks the item, and the diff carrying the override goes past CODEOWNERS
+    like every other reviewed byte.
 
     NOTHING IS WRITTEN WHEN THE SCAN FAILS. An unavailable review is a
     transient failure, not a verdict. Committing one would leave a file the
@@ -499,24 +610,14 @@ def _review_one_version(args: argparse.Namespace) -> int:
     """
     root = Path(args.repo_root).resolve()
     handle, name, version = args.handle, args.name, args.version
-    config = load_config(root)
-    publishers = load_publishers(root)
-
-    release_file = root / RELEASES_DIR / handle / name / f"{version}.json"
-    if not release_file.is_file():
+    reason = str(args.override_blocked or "").strip()
+    if args.override_blocked is not None and not reason:
         print(
-            f"::error::there is no {RELEASES_DIR}/{handle}/{name}/{version}.json, "
-            f"so there is no signed release whose bytes could be reviewed",
+            "::error::--override-blocked needs the reason the block is being "
+            "waved through; it is written into the committed review and read "
+            "by whoever reviews the pull request",
             file=sys.stderr,
         )
-        return 1
-    try:
-        release = verify_release(
-            root, release_file,
-            publishers=publishers, repo_slug=_repo_slug(config.repo),
-        )
-    except ReleaseRefused as exc:
-        print(f"::error::{exc}", file=sys.stderr)
         return 1
 
     settings = _review_settings(root)
@@ -529,22 +630,57 @@ def _review_one_version(args: argparse.Namespace) -> int:
         )
         return 1
 
-    skill_path = f"{SKILLS_DIR}/{handle}/{name}"
-    members = _walk_members(root, release.commit, skill_path)
-    if not members:
-        print(
-            f"::error::the tree at {release.commit} could not be listed, so "
-            f"there is nothing to review",
-            file=sys.stderr,
+    if args.staged:
+        folder = Path(args.staged).expanduser().resolve()
+        if not (folder / "SKILL.md").is_file():
+            print(
+                f"::error::{folder} holds no SKILL.md, so there is no skill "
+                f"there to review",
+                file=sys.stderr,
+            )
+            return 1
+        digest, entries = digest_directory(folder)
+        members = [(entry.relpath, entry.mode) for entry in entries]
+        body = collect_staged_text(
+            folder, members=members, max_chars=settings.max_chars,
         )
-        return 1
-    body = collect_text(
-        root,
-        commit=release.commit,
-        skill_path=skill_path,
-        members=members,
-        max_chars=settings.max_chars,
-    )
+    else:
+        config = load_config(root)
+        publishers = load_publishers(root)
+        release_file = root / RELEASES_DIR / handle / name / f"{version}.json"
+        if not release_file.is_file():
+            print(
+                f"::error::there is no {RELEASES_DIR}/{handle}/{name}/{version}.json, "
+                f"so there is no signed release whose bytes could be reviewed",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            release = verify_release(
+                root, release_file,
+                publishers=publishers, repo_slug=_repo_slug(config.repo),
+            )
+        except ReleaseRefused as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
+        digest = release.digest
+        skill_path = f"{SKILLS_DIR}/{handle}/{name}"
+        members = _walk_members(root, release.commit, skill_path)
+        if not members:
+            print(
+                f"::error::the tree at {release.commit} could not be listed, "
+                f"so there is nothing to review",
+                file=sys.stderr,
+            )
+            return 1
+        body = collect_text(
+            root,
+            commit=release.commit,
+            skill_path=skill_path,
+            members=members,
+            max_chars=settings.max_chars,
+        )
+
     block = review_one(body, settings, now=_now())
     if block.get("status") != "reviewed":
         print(
@@ -554,14 +690,144 @@ def _review_one_version(args: argparse.Namespace) -> int:
         )
         return 1
 
+    verdict = _verdict_of(block)
+    _print_findings(block)
+
+    if reason:
+        if verdict != VERDICT_BLOCKED:
+            print(
+                f"::error::--override-blocked was given but the verdict is "
+                f"{verdict}, not {VERDICT_BLOCKED}. There is nothing to "
+                f"override and nothing was written",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            actor = _override_actor(root)
+        except RuntimeError as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
+        block[OVERRIDE_FIELD] = dict(zip(OVERRIDE_KEYS, (reason, actor, _now())))
+        _notice(
+            f"the blocked verdict for {handle}/{name} {version} is being "
+            f"overridden by {actor}: {reason}"
+        )
+
     written = write_review(
-        root, handle, name, version, Review(digest=release.digest, block=block),
+        root, handle, name, version, Review(digest=digest, block=block),
     )
     print(
         f"wrote {written.relative_to(root)}, bound to digest "
-        f"{release.digest[:12]}, reviewed by {block.get('model')}"
+        f"{digest[:12]}, reviewed by {block.get('model')}"
     )
+
+    if verdict == VERDICT_BLOCKED and not is_overridden(block):
+        print(
+            f"::error::{handle}/{name} {version} is BLOCKED by its security "
+            f"review and must not be published. Read the findings above. To "
+            f"publish it anyway, run this again with "
+            f"--override-blocked \"<reason>\"",
+            file=sys.stderr,
+        )
+        return 1
+    if args.require_clean and verdict != VERDICT_CLEAN:
+        print(
+            f"::error::{handle}/{name} {version} reviewed {verdict} and "
+            f"--require-clean was asked for, so it is refused here",
+            file=sys.stderr,
+        )
+        return 1
     return 0
+
+
+def cmd_check_reviews(args: argparse.Namespace) -> int:
+    """Refuse a build carrying a blocked version, and print every verdict.
+
+    :param args: the parsed command line, naming the assembled index.
+    :returns: 0 when every published version may be published, 1 when one
+        may not.
+
+    THE BACKSTOP, AND IT RUNS ON PULL REQUESTS. The approval gate lives in
+    the script a maintainer runs, and a gate that only lives in one script
+    is a gate a hand commit walks past. This step reads the COMMITTED
+    reviews for the versions the index just assembled and refuses the whole
+    build when one of them is blocked with no well formed override. It
+    holds no cloud credential and calls no model, so it runs in the verify
+    job on every pull request from anybody.
+
+    A REVIEW OF OTHER BYTES DECIDES NOTHING. A committed review whose
+    recorded digest is not this version's digest is reported ``stale`` and
+    does not refuse: it is not a review of what is being published, and the
+    review step will take a fresh one. Absent is reported too, because a
+    version with no committed review is one the build will pay a model for,
+    which is a thing worth seeing rather than a silent blank.
+    """
+    root = Path(args.repo_root).resolve()
+    document = json.loads(Path(args.index).read_text(encoding="utf-8"))
+    rows: List[Tuple[str, ...]] = []
+    refused: List[str] = []
+
+    for item in document.get("items", []):
+        item_id = str(item.get("id", ""))
+        handle = str(item.get("publisher") or "")
+        name = str(item.get("name") or "")
+        for version in item.get("versions", []):
+            label = str(version.get("v") or "")
+            digest = str(version.get("digest") or "")
+            found = read_review(root, handle, name, label)
+            if found is None:
+                # A FILE THAT EXISTS AND CANNOT BE READ IS NOT AN ABSENT ONE.
+                # Absent is normal and means the review step will pay for a
+                # fresh call. Present and unreadable is a committed review
+                # somebody broke, and treating it as absent would make
+                # corrupting the artifact the way past this check.
+                try:
+                    exists = review_path(root, handle, name, label).is_file()
+                except ReviewArtifactInvalid:
+                    exists = False
+                if exists:
+                    rows.append((item_id, label, "unreadable", "refused"))
+                    refused.append(f"{item_id} {label} (its committed review "
+                                   f"could not be read)")
+                    continue
+                rows.append((item_id, label, "none", "not committed"))
+                continue
+            verdict = _verdict_of(found.block)
+            if found.digest != digest:
+                rows.append((item_id, label, verdict, "stale, other bytes"))
+                continue
+            overridden = is_overridden(found.block)
+            note = "overridden" if overridden else "committed"
+            rows.append((item_id, label, verdict, note))
+            if verdict == VERDICT_BLOCKED and not overridden:
+                refused.append(f"{item_id} {label}")
+
+    for row in rows:
+        print(f"{row[0]} {row[1]}: {row[2]} ({row[3]})")
+    if not rows:
+        print("this index lists no versions, so no review was checked")
+    _write_job_summary(
+        rows,
+        heading="committed review verdicts",
+        columns=("skill", "version", "verdict", "source"),
+        note=(
+            "a `blocked` verdict with no written override refuses this build. "
+            "`stale, other bytes` means a committed review describes a "
+            "different digest, so it decides nothing and the review step "
+            "takes a fresh one."
+        ),
+    )
+    if refused:
+        print(
+            f"::error::blocked by the security review and not overridden: "
+            f"{', '.join(refused)}. A blocked version publishes only with an "
+            f"override written into its committed review under reviews/, "
+            f"which goes past CODEOWNERS in the pull request diff.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
 
 def _walk_members(root: Path, commit: str, skill_path: str) -> List[tuple]:
     """List a skill folder's members at one commit, with their modes.
@@ -699,7 +965,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--version", default="",
         help="review one version and commit it: the version",
     )
+    look.add_argument(
+        "--staged", default="",
+        help="review a skill folder ON DISK that is not committed yet, which "
+             "is the approval moment; the digest is computed from the folder",
+    )
+    look.add_argument(
+        "--override-blocked", default=None, metavar="REASON",
+        help="publish a blocked version anyway, writing this reason, who you "
+             "are and when into the committed review. It never changes the "
+             "verdict",
+    )
+    look.add_argument(
+        "--require-clean", action="store_true",
+        help="refuse anything that is not clean, not only what is blocked",
+    )
     look.set_defaults(handler=cmd_review)
+
+    audit = sub.add_parser(
+        "check-reviews",
+        help="refuse the build when a committed review is blocked",
+    )
+    audit.add_argument("--index", required=True, help="the assembled index")
+    audit.set_defaults(handler=cmd_check_reviews)
 
     shelf = sub.add_parser(
         "marketplace",
