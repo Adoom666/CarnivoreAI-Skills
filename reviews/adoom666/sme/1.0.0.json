@@ -1,0 +1,21 @@
+{
+  "digest": "dfd68a92024aabcc271ffee0e3b98cfa900529ac5c2f4fb86a2791ed5135c6ea",
+  "status": "reviewed",
+  "verdict": "blocked",
+  "summary": "this skill attempts to inject a prompt into the agent's instructions, which is a security risk.",
+  "warnings": [
+    {
+      "kind": "prompt_injection",
+      "detail": "the skill attempts to override the agent's instructions by instructing it to adopt a new system prompt and to have all subagents act as SMEs.",
+      "file": "SKILL.md",
+      "line": 7
+    }
+  ],
+  "model": "google/gemini-2.5-flash-lite",
+  "reviewed_at": "2026-09-19T16:02:12Z",
+  "override": {
+    "reason": "owner ruling 2026-09-19: the sme skill instructs the loading agent to compose and adopt an expert system prompt by design; that is its documented purpose, not an injection",
+    "by": "Adoom666",
+    "at": "2026-09-19T16:02:14Z"
+  }
+}
