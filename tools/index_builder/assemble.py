@@ -30,12 +30,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .frontmatter import card_and_fm, extras_of, parse_front_matter
+from .frontmatter import brief_of, card_and_fm, extras_of, parse_front_matter
 from .minisign_verify import MinisignFormatError, parse_signature, verify
 from .publishers import PublisherRecord
+from .loadouts import MANIFEST, check_members, parse_loadout
 from .releases import (
+    FOLDER_FOR_KIND,
+    KIND_LOADOUT,
     KIND_SKILL,
     SKILLS_DIR,
+    _git,
     ReleaseRefused,
     VerifiedRelease,
 )
@@ -260,7 +264,7 @@ def _version_entry(
         "v": release.version,
         "src": {
             "repo": repo_slug,
-            "path": f"{SKILLS_DIR}/{release.handle}/{release.name}",
+            "path": f"{FOLDER_FOR_KIND[release.kind]}/{release.handle}/{release.name}",
             "commit": release.commit,
         },
         "digest": release.digest,
@@ -269,11 +273,54 @@ def _version_entry(
         "scripts": release.scripts,
         "published_at": release.published_at,
         "sig": dict(release.sig),
-        "grade": dict(release.grade),
     }
+    if release.grade:
+        entry["grade"] = dict(release.grade)
     if review is not None:
         entry["review"] = review
     return entry
+
+
+def _loadout_item(
+    repo_root: Path,
+    handle: str,
+    name: str,
+    ordered: List[VerifiedRelease],
+    repo_slug: str,
+    indexed: Dict[str, Tuple[str, Dict[str, str]]],
+) -> Dict[str, object]:
+    """Render one loadout item, proving every version's members first.
+
+    Every version's ``loadout.json`` is read at THAT version's commit (the
+    bytes the digest covers) and its members are checked against the index
+    being built. The card comes from the latest version's manifest. There is
+    no ``fm_keys``, ``cost`` or ``related``: those describe a SKILL.md.
+
+    :raises ReleaseRefused: when a manifest or any member fails the checks.
+    """
+    item_id = f"{handle}/{name}"
+    folder = FOLDER_FOR_KIND[KIND_LOADOUT]
+    parsed = None
+    for release in ordered:
+        text = _git(
+            repo_root, "show", f"{release.commit}:{folder}/{handle}/{name}/{MANIFEST}",
+        )
+        parsed = parse_loadout(text, item_id=item_id)
+        check_members(item_id, release.version, parsed[2], indexed)
+    assert parsed is not None
+    title, description, _members = parsed
+    card = {"title": title, "brief": brief_of(description)}
+    fm = {"description": description}
+    return {
+        "id": item_id,
+        "kind": KIND_LOADOUT,
+        "name": name,
+        "publisher": handle,
+        "latest": ordered[-1].version,
+        "card": card,
+        "fm": fm,
+        "versions": [_version_entry(r, repo_slug, None) for r in ordered],
+    }
 
 
 def assemble(
@@ -305,11 +352,22 @@ def assemble(
     for release in releases:
         grouped.setdefault((release.handle, release.name), []).append(release)
 
+    # Every verified item, for the loadout cross check: id -> (kind, {v: digest}).
+    indexed = {
+        f"{h}/{n}": (g[0].kind, {r.version: r.digest for r in g})
+        for (h, n), g in grouped.items()
+    }
+
     items: List[Dict[str, object]] = []
     version_count = 0
     for (handle, name), group in sorted(grouped.items()):
         ordered = sorted(group, key=lambda r: version_sort_key(r.version))
         latest = ordered[-1]
+        if latest.kind == KIND_LOADOUT:
+            items.append(_loadout_item(
+                repo_root, handle, name, ordered, repo_slug, indexed))
+            version_count += len(ordered)
+            continue
         skill_md = repo_root / SKILLS_DIR / handle / name / "SKILL.md"
         if not skill_md.is_file():
             raise ReleaseRefused(

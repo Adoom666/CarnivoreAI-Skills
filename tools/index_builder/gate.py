@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Sequence, Set, Tuple
 
-from .releases import RELEASES_DIR, SKILLS_DIR
+from .releases import LOADOUTS_DIR, RELEASES_DIR, SKILLS_DIR
 
 
 def changed_paths(repo_root: Path, base: str, head: str) -> List[str]:
@@ -85,7 +85,7 @@ def unreleased_changes(changed: Sequence[str]) -> List[Tuple[str, str]]:
     touched_skills: Set[Tuple[str, str]] = set()
     touched_releases: Set[Tuple[str, str]] = set()
     for path in changed:
-        skill = _skill_of(path, SKILLS_DIR)
+        skill = _skill_of(path, SKILLS_DIR) or _skill_of(path, LOADOUTS_DIR)
         if skill is not None:
             touched_skills.add(skill)
             continue
@@ -110,7 +110,8 @@ def gate_report(changed: Sequence[str]) -> Tuple[bool, List[str]]:
     offenders = unreleased_changes(changed)
     skills_touched = sorted({
         pair for pair in
-        (_skill_of(path, SKILLS_DIR) for path in changed) if pair is not None
+        (_skill_of(path, SKILLS_DIR) or _skill_of(path, LOADOUTS_DIR)
+         for path in changed) if pair is not None
     })
     lines = [
         f"paths in this diff: {len(changed)}",
@@ -123,7 +124,8 @@ def gate_report(changed: Sequence[str]) -> Tuple[bool, List[str]]:
         return True, lines
     for handle, name in offenders:
         lines.append(
-            f"REFUSED: this diff changes {SKILLS_DIR}/{handle}/{name} but no "
+            f"REFUSED: this diff changes the {SKILLS_DIR} or {LOADOUTS_DIR} folder "
+            f"{handle}/{name} but no "
             f"file under {RELEASES_DIR}/{handle}/{name}. Sign a release for "
             f"the new content with scripts/catalog-bootstrap/sign_release.py "
             f"and commit it in this pull request, or the catalog will go on "

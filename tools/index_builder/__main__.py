@@ -55,6 +55,7 @@ from .marketplace import (
 from .publishers import load_index_key, load_publishers
 from .releases import (
     RELEASES_DIR,
+    FOLDER_FOR_KIND,
     SKILLS_DIR,
     ReleaseRefused,
     VerifiedRelease,
@@ -531,10 +532,12 @@ def _review_index(args: argparse.Namespace) -> int:
         item_id = item.get("id", "")
         handle = str(item.get("publisher") or "")
         name = str(item.get("name") or "")
-        skill_path = f"{SKILLS_DIR}/{handle}/{name}"
         for version in item.get("versions", []):
             digest = version.get("digest", "")
             label = str(version.get("v") or "")
+            skill_path = str(
+                version.get("src", {}).get("path") or f"{SKILLS_DIR}/{handle}/{name}"
+            )
 
             saved = committed_review(root, handle, name, label, digest)
             if saved is not None:
@@ -721,7 +724,7 @@ def _review_one_version(args: argparse.Namespace) -> int:
         if release is None:
             return 1
         digest = release.digest
-        skill_path = f"{SKILLS_DIR}/{handle}/{name}"
+        skill_path = f"{FOLDER_FOR_KIND[release.kind]}/{handle}/{name}"
         members = _walk_members(root, release.commit, skill_path)
         if not members:
             print(

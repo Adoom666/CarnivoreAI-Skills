@@ -219,6 +219,8 @@ def build_marketplace(
     entries: List[Dict[str, object]] = []
     claimed: Dict[str, str] = {}
     for item in items:
+        if item.get("kind") == "loadout":
+            continue  # a pack of pinned skills, not a plugin folder
         entry = plugin_entry(item, publishers=publishers)
         name = str(entry["name"])
         item_id = str(item.get("id", name))

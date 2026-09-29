@@ -62,9 +62,17 @@ RELEASES_DIR = "releases"
 #: Where the skill folders themselves live.
 SKILLS_DIR = "skills"
 
-#: The only kind this catalog publishes today. The app refuses anything
-#: else, so writing one would be publishing something nobody can install.
+#: Where loadout folders live: a folder holding one ``loadout.json`` that
+#: lists other items by id, version and digest.
+LOADOUTS_DIR = "loadouts"
+
+#: The kinds this catalog publishes. The app refuses anything else, so
+#: writing one would be publishing something nobody can install.
 KIND_SKILL = "skill"
+KIND_LOADOUT = "loadout"
+
+#: The folder each kind's items sit under.
+FOLDER_FOR_KIND = {KIND_SKILL: SKILLS_DIR, KIND_LOADOUT: LOADOUTS_DIR}
 
 #: A version is listed as a script bearer when a member sits under this
 #: folder or carries the owner execute bit. Both are counted because the
@@ -88,6 +96,7 @@ class ReleaseRefused(Exception):
 class VerifiedRelease:
     """One version this job is willing to publish.
 
+    - ``kind``: ``skill`` or ``loadout``, which decides the folder.
     - ``handle``, ``name``, ``version``: the identity, all three taken
       from the signed statement rather than from the file's path.
     - ``commit``: the 40 hex commit whose tree was re-digested.
@@ -104,6 +113,7 @@ class VerifiedRelease:
       in this module reads it and no grade can refuse a release.
     """
 
+    kind: str
     handle: str
     name: str
     version: str
@@ -116,7 +126,28 @@ class VerifiedRelease:
     size: int
     files: int
     scripts: int
-    grade: Dict[str, object]
+    grade: Dict[str, object]  # empty for a loadout: nothing to grade
+
+
+def kind_of(repo_root: Path, handle: str, name: str) -> str:
+    """Say whether ``<handle>/<name>`` is a skill or a loadout.
+
+    :returns: ``skill`` or ``loadout``, by which folder holds it in the
+        working tree. Neither defaults to ``skill`` so the existing
+        "folder is not there at that commit" refusal still speaks.
+    :raises ReleaseRefused: when BOTH folders exist, because one item id
+        cannot be two kinds.
+
+    Example: kind_of(root, "adoom666", "adooms-pack") -> "loadout"
+    """
+    is_skill = (repo_root / SKILLS_DIR / handle / name).is_dir()
+    is_loadout = (repo_root / LOADOUTS_DIR / handle / name).is_dir()
+    if is_skill and is_loadout:
+        raise ReleaseRefused(
+            f"{handle}/{name} exists under both {SKILLS_DIR}/ and "
+            f"{LOADOUTS_DIR}/; an item id is exactly one kind"
+        )
+    return KIND_LOADOUT if is_loadout else KIND_SKILL
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -232,7 +263,7 @@ def _key_for(
 
 
 def _checked_out_digest(
-    repo_root: Path, commit: str, relpath: str, where: str,
+    repo_root: Path, commit: str, relpath: str, where: str, grade: bool = True,
 ) -> Tuple[str, Tuple[DigestEntry, ...], Dict[str, object]]:
     """Re-digest and grade a skill folder as it stood at one commit.
 
@@ -268,7 +299,8 @@ def _checked_out_digest(
                 f"{where}: {relpath} is not a folder at commit {commit}",
             )
             folder_digest, entries = digest_directory(folder)
-            return folder_digest, entries, grade_folder(folder)
+            graded = grade_folder(folder) if grade else {}
+            return folder_digest, entries, graded
         finally:
             subprocess.run(
                 ["git", "-C", str(repo_root), "worktree", "remove",
@@ -337,11 +369,12 @@ def verify_release(
     assert isinstance(statement_text, str)
 
     sig_block = _signature_block(raw.get("sig"), where)
-    skill_path = f"{SKILLS_DIR}/{handle}/{name}"
+    kind = kind_of(repo_root, handle, name)
+    skill_path = f"{FOLDER_FOR_KIND[kind]}/{handle}/{name}"
 
     try:
         expected = release_statement(
-            kind=KIND_SKILL,
+            kind=kind,
             publisher=handle,
             name=name,
             version=version,
@@ -384,7 +417,7 @@ def verify_release(
     )
 
     actual_digest, entries, grade = _checked_out_digest(
-        repo_root, commit, skill_path, where,
+        repo_root, commit, skill_path, where, grade=kind == KIND_SKILL,
     )
     _require(
         actual_digest == digest,
@@ -402,7 +435,13 @@ def verify_release(
         if entry.relpath.startswith(SCRIPTS_PREFIX) or entry.mode == MODE_EXECUTABLE
     )
 
+    _require(
+        kind != KIND_LOADOUT or scripts == 0,
+        f"{where}: a loadout carries no scripts, and {skill_path} has {scripts}",
+    )
+
     return VerifiedRelease(
+        kind=kind,
         handle=handle,
         name=name,
         version=version,
