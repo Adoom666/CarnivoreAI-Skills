@@ -32,6 +32,9 @@ import pytest
 from index_builder.digest import digest_directory
 from index_builder.review import (
     BLOCKING_KINDS,
+    SYSTEM_PROMPT,
+    merge_findings,
+    precheck_instruction_writes,
     ReviewUnavailable,
     collect_staged_text,
     derive_verdict,
@@ -267,3 +270,47 @@ def test_parse_review_accepts_instructions_write() -> None:
     }))
     assert verdict == "flagged"
     assert [w["kind"] for w in warnings] == ["instructions_write"]
+
+
+def test_prompt_carries_the_laundering_rule_and_names_every_instruction_file() -> None:
+    """What a skill writes INTO an instruction file is judged on its content."""
+    assert "judge what the skill writes into it as if the skill said it" in SYSTEM_PROMPT
+    assert "report each of these as its own finding" in SYSTEM_PROMPT
+    for name in ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md",
+                 "AGENTS.override.md", "MEMORY.md"):
+        assert name in SYSTEM_PROMPT, name
+    assert "no two findings may share both kind and file" in SYSTEM_PROMPT
+
+
+def _pack(*files: Tuple[str, str]) -> str:
+    return "\n\n".join(f"--- {n} (mode 644) ---\n{t}" for n, t in files)
+
+
+def test_precheck_matches_scrooges_warning_line_and_names_both_files() -> None:
+    body = _pack(("SKILL.md", "intro\nnever edit CLAUDE.md or AGENTS.md without a backup and a yes"))
+    (finding,) = precheck_instruction_writes(body)
+    assert finding["kind"] == "instructions_write"
+    assert finding["file"] == "SKILL.md" and finding["line"] == 2
+    assert "CLAUDE.md" in finding["detail"] and "AGENTS.md" in finding["detail"]
+
+
+def test_precheck_ignores_a_read_only_mention() -> None:
+    assert precheck_instruction_writes(_pack(("SKILL.md", "read CLAUDE.md before you start"))) == []
+
+
+def test_precheck_matches_a_shell_append() -> None:
+    (finding,) = precheck_instruction_writes(_pack(("run.sh", "echo x >> AGENTS.md")))
+    assert "AGENTS.md" in finding["detail"]
+
+
+def test_precheck_gives_one_finding_per_package_file() -> None:
+    body = _pack(("SKILL.md", "append a rule to CLAUDE.md\nthen update MEMORY.md too"))
+    (finding,) = precheck_instruction_writes(body)
+    assert finding["line"] == 1
+    assert "CLAUDE.md" in finding["detail"] and "MEMORY.md" in finding["detail"]
+
+
+def test_a_model_finding_and_a_precheck_finding_for_one_file_merge_to_one() -> None:
+    pre = precheck_instruction_writes(_pack(("SKILL.md", "edit CLAUDE.md")))
+    model = [{"kind": "instructions_write", "detail": "edits CLAUDE.md", "file": "SKILL.md"}]
+    assert len(merge_findings(model, pre)) == 1

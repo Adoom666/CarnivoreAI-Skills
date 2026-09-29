@@ -126,10 +126,34 @@ security checklist. it returns a `verdict` of `clean`, `flagged` or `blocked`.
 five kinds of finding block a publish: `prompt_injection`, `credential_access`,
 `obfuscation`, `opaque_payload` and `settings_write`. each is something no
 legitimate skill in a public catalog needs to do, so a publish stops rather
-than a reader being asked to notice a warning. the other seven, `instructions_write` (an edit to `CLAUDE.md` or `AGENTS.md`, which warns rather than blocks), `network`,
+than a reader being asked to notice a warning. the other seven, `instructions_write`, `network`,
 `shell_exec`, `file_delete`, `privilege`, `description_mismatch` and `other`,
 are advisory: a skill that fetches documentation or runs a command is doing its
 job, and the detail names the host or the path so a human can judge.
+
+`settings_write` (blocking) is an edit to a file that grants capability:
+`settings.json`, `settings.local.json`, `managed-settings.json`, `.mcp.json`,
+`~/.claude.json`, `~/.codex/config.toml`, a permission allow or deny list, a
+hook or a script a hook runs, a shell rc file, or any markdown whose
+frontmatter grants tools, a model, a permission mode or hooks
+(`.claude/agents/*.md`, `.claude/commands/*.md`, another skill's `SKILL.md`).
+
+`instructions_write` (advisory, a warning only) is a skill that creates,
+appends to, rewrites or deletes lines in a plain-prose agent instruction file:
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md` or
+`MEMORY.md`, in any directory. it covers only the act of editing, and the
+finding's detail names the file or files. what the skill writes into the file
+is judged as if it said it to the agent directly: text that overrides the
+user's rules is `prompt_injection`, text that tells a later agent to edit
+settings is `settings_write`, a secret read or an `@path` import of one is
+`credential_access`, and text or an import that is downloaded, generated or not
+shown to the reviewer is `opaque_payload`. each is reported as its own finding
+beside the `instructions_write` one.
+
+**app compatibility.** Carnivore app builds before the forward-compatible-kinds
+release do not know `instructions_write`, and they drop an item whose review
+carries a kind they do not know. the catalog holds items with this kind until
+that release is out.
 
 **the verdict is re-derived, never taken on trust.** the model is asked for it
 so its answer is self consistent, and then the verdict is recomputed from the
