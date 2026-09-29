@@ -165,6 +165,12 @@ def test_a_signed_release_is_listed(catalog: dict) -> None:
     assert version["scripts"] == 0
     assert set(version["sig"]) == {"key_id", "sig", "tc", "gsig"}
     assert "review" not in version, "assemble must not invent a review"
+    # the four additive item fields: cost and fm_keys always, the others only
+    # when the front matter states them
+    assert item["cost"]["estimator"] == "chars/4"
+    assert item["cost"]["desc_tokens"] > 0 and item["cost"]["body_tokens"] > 0
+    assert item["fm_keys"] == ["description", "license", "name"]
+    assert "related" not in item and "deprecated" not in item
 
 
 @requires_minisign

@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .frontmatter import card_and_fm, parse_front_matter
+from .frontmatter import card_and_fm, extras_of, parse_front_matter
 from .minisign_verify import MinisignFormatError, parse_signature, verify
 from .publishers import PublisherRecord
 from .releases import (
@@ -331,6 +331,7 @@ def assemble(
             "card": card,
             "fm": fm,
             "versions": [_version_entry(r, repo_slug, None) for r in ordered],
+            **extras_of(front),
         })
         version_count += len(ordered)
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
@@ -37,6 +37,11 @@ class SkillFrontMatter:
     - ``allowed_tools``: optional list, from ``allowed-tools`` or
       ``allowed_tools``; both spellings are in the wild.
     - ``tags``: optional list for the card.
+    - ``keys``: every top level front matter key, sorted, as written.
+    - ``body``: the text after the closing fence, for the cost estimate.
+    - ``related``: item ids from an explicit ``related`` key, else None.
+    - ``deprecated``, ``superseded_by``: from the ``deprecated`` and
+      ``superseded-by`` (or ``superseded_by``) keys.
     """
 
     name: Optional[str]
@@ -45,6 +50,11 @@ class SkillFrontMatter:
     compatibility: Optional[str]
     allowed_tools: Optional[List[str]]
     tags: Optional[List[str]]
+    keys: Tuple[str, ...] = ()
+    body: str = ""
+    related: Optional[List[str]] = None
+    deprecated: bool = False
+    superseded_by: Optional[str] = None
 
 
 def _string_list(raw: object) -> Optional[List[str]]:
@@ -109,7 +119,15 @@ def parse_front_matter(skill_md: Path) -> SkillFrontMatter:
         value = block.get(key)
         return value.strip() if isinstance(value, str) and value.strip() else None
 
+    deprecated_raw = block.get("deprecated")
+    superseded = block.get("superseded-by", block.get("superseded_by"))
+    superseded = superseded.strip() if isinstance(superseded, str) else None
     return SkillFrontMatter(
+        keys=tuple(sorted(str(k) for k in block)),
+        body="\n".join(lines[end + 1:]),
+        related=_string_list(block.get("related")),
+        deprecated=deprecated_raw is True or bool(superseded),
+        superseded_by=superseded or None,
         name=optional("name"),
         description=description.strip(),
         license=optional("license"),
@@ -195,3 +213,48 @@ def card_and_fm(
     if front.allowed_tools:
         fm["allowed_tools"] = front.allowed_tools
     return card, fm
+
+
+#: Label written beside every cost figure. The estimator is a character
+#: count divided by four, which is a rough English-text average and NOT a
+#: tokenizer, so the index says so rather than passing it off as a measure.
+COST_ESTIMATOR = "chars/4"
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate the tokens in a text: characters divided by four, rounded up.
+
+    :param text: any text.
+    :returns: the estimate, 0 for empty text. Labelled ``est.`` wherever shown.
+    Example: estimate_tokens("abcdefgh") -> 2
+    """
+    return -(-len(text.strip()) // 4)
+
+
+def extras_of(front: SkillFrontMatter) -> Dict[str, object]:
+    """Build the four additive item fields from the front matter.
+
+    Description: ``cost`` (description tokens are paid every turn, body
+      tokens only when the skill is used), ``fm_keys``, and ``related`` and
+      ``deprecated`` only when the front matter states them. Absent fields
+      are OMITTED, never null. An older app ignores all four.
+    Inputs: front (SkillFrontMatter).
+    Output: dict to merge into the item.
+    Example: extras_of(front)["cost"]["desc_tokens"] -> 42
+    """
+    extras: Dict[str, object] = {
+        "cost": {
+            "desc_tokens": estimate_tokens(front.description),
+            "body_tokens": estimate_tokens(front.body),
+            "estimator": COST_ESTIMATOR,
+        },
+        "fm_keys": list(front.keys),
+    }
+    if front.related:
+        extras["related"] = front.related
+    if front.deprecated:
+        dep: Dict[str, object] = {}
+        if front.superseded_by:
+            dep["superseded_by"] = front.superseded_by
+        extras["deprecated"] = dep
+    return extras

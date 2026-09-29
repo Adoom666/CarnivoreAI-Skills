@@ -85,3 +85,25 @@ def test_publisher_punctuation_is_left_exactly_as_written() -> None:
     assert "—" in brief
     assert "→" in brief
     assert "✅" in brief
+
+
+def test_extras_carry_cost_keys_related_and_deprecated(tmp_path) -> None:
+    """The four additive fields come from the front matter, and only when stated."""
+    from index_builder.frontmatter import extras_of, parse_front_matter
+
+    md = tmp_path / "SKILL.md"
+    md.write_text(
+        "---\nname: x\ndescription: abcdefgh\nallowed-tools: Read\n"
+        "related: [a/b, c/d]\ndeprecated: true\nsuperseded-by: e/f\n---\n"
+        "body of twelve\n",
+        encoding="utf-8",
+    )
+    extras = extras_of(parse_front_matter(md))
+    assert extras["cost"] == {"desc_tokens": 2, "body_tokens": 4, "estimator": "chars/4"}
+    assert extras["fm_keys"] == ["allowed-tools", "deprecated", "description", "name", "related", "superseded-by"]
+    assert extras["related"] == ["a/b", "c/d"]
+    assert extras["deprecated"] == {"superseded_by": "e/f"}
+
+    md.write_text("---\ndescription: abcdefgh\n---\n", encoding="utf-8")
+    plain = extras_of(parse_front_matter(md))
+    assert set(plain) == {"cost", "fm_keys"}
