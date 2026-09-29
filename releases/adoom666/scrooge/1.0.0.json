@@ -1,0 +1,11 @@
+{
+  "statement": "carnivore-release-v1\nskill\nadoom666\nscrooge\n1.0.0\nAdoom666/CarnivoreAI-Skills\nskills/adoom666/scrooge\n9ced4bd1a91bc273341b87f87fa3048abb5b0ff8\n1fa26a636847fa4d6375100dcbca8d2536682013be127449802b8a82c70ed80d\n",
+  "sig": {
+    "key_id": "3463B8E83B44738B",
+    "sig": "RUSLc0Q76LhjNNbz1SbE8S+i5k+82Bd5uZRB8rzApqN22jSIaTBp1jjQnFf40JSbDD2N+HMBd4UHMH9pIg4UP7tRlEcQISp4FAo=",
+    "tc": "timestamp:1790662295\tfile:statement.txt\thashed",
+    "gsig": "bsZ5iCB+gn2R28AWEINu8lkxIxilS/6KqgJIyZB01ZH5B31BJk8HbMCj5A61OACzghKRhcoIi/K8GL/Ld8jtBA=="
+  },
+  "commit": "9ced4bd1a91bc273341b87f87fa3048abb5b0ff8",
+  "digest": "1fa26a636847fa4d6375100dcbca8d2536682013be127449802b8a82c70ed80d"
+}
