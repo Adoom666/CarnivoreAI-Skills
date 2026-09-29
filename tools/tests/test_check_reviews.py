@@ -241,3 +241,11 @@ def test_every_refused_version_is_named_not_just_the_first(
     ]) == 1
     printed = capsys.readouterr().err
     assert "1.0.0" in printed and "2.0.0" in printed
+
+
+def test_a_committed_review_that_is_unavailable_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    """A hand-written unavailable artifact must not approve the bytes."""
+    assert _run(tmp_path, {"digest": DIGEST, "status": "unavailable"}) == 1
+    assert "committed review is unavailable, re-run the review" in capsys.readouterr().err

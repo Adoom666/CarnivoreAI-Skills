@@ -63,6 +63,7 @@ from .releases import (
     verify_release,
 )
 from .review import (
+    STATUS_REVIEWED,
     VERDICT_BLOCKED,
     VERDICT_CLEAN,
     ReviewSettings,
@@ -71,10 +72,12 @@ from .review import (
     collect_text,
     existing_review,
     review_one,
+    take_discard_hint,
 )
 from .review_store import (
     OVERRIDE_FIELD,
     OVERRIDE_KEYS,
+    REVIEWS_DIR,
     Review,
     ReviewArtifactInvalid,
     committed_review,
@@ -98,6 +101,7 @@ SIGNING_SECRET_ENV = "INDEX_SIGNING_SECRET_VALUE"
 REFUSE_ABSENT = "no committed review for these bytes"
 REFUSE_STALE = "committed review is for a different digest"
 REFUSE_BLOCKED = "blocked without override"
+REFUSE_UNAVAILABLE = "committed review is unavailable, re-run the review"
 
 
 def _notice(message: str) -> None:
@@ -415,7 +419,7 @@ def _review_settings(root: Path) -> ReviewSettings:
       somebody should be able to explain from the log alone.
     Inputs: root (Path) - the repository root, holding catalog.yml.
     Output: ReviewSettings; ``api_key`` is None when no usable key was set.
-    Example: _review_settings(Path(".")).model -> "google/gemini-2.5-flash-lite"
+    Example: _review_settings(Path(".")).model -> "anthropic/claude-sonnet-5.5"
 
     THE KEY IS NEVER LOGGED. It is read here, handed to one Authorization
     header, and nothing else in this process sees it.
@@ -648,6 +652,70 @@ def _print_findings(block: Dict[str, object]) -> None:
         print(f"  {entry.get('kind')}  {where}  {entry.get('detail')}")
 
 
+def _blocked_reviews(root: Path) -> List[Tuple[str, str, str, str, str]]:
+    """Every committed BLOCKED review as (handle, name, version, digest, kinds)."""
+    found = []
+    for path in sorted((root / REVIEWS_DIR).glob("*/*/*.json")):
+        handle, name, version = path.parent.parent.name, path.parent.name, path.stem
+        stored = read_review(root, handle, name, version)
+        if stored is None or stored.block.get("verdict") != VERDICT_BLOCKED:
+            continue
+        warnings = stored.block.get("warnings")
+        kinds = sorted({
+            str(w.get("kind")) for w in warnings if isinstance(w, dict)
+        }) if isinstance(warnings, list) else []
+        found.append((handle, name, version, stored.digest, ", ".join(kinds)))
+    return found
+
+
+def _blocked_review_stands(
+    root: Path, handle: str, name: str, version: str, digest: str,
+    args: argparse.Namespace,
+) -> bool:
+    """Refuse to write a review for a DIGEST that already has a blocked one.
+
+    A blocked answer sticks: re-running the model until it stops saying
+    blocked is not a way to publish, and neither is resubmitting the same
+    bytes under a new version or a new name. The check is on the digest, over
+    every committed artifact. The only ways past are --replace-blocked, or
+    --override-blocked, which keeps the verdict blocked and records who waved
+    it through. Also warns about an earlier blocked version of the same
+    handle and name with different bytes. Prints why and returns True to
+    refuse.
+    """
+    blocked = _blocked_reviews(root)
+    for h, n, v, d, kinds in blocked:
+        if (h, n) == (handle, name) and d != digest:
+            print(
+                f"::warning::{h}/{n} {v} was BLOCKED earlier ({kinds}); "
+                f"{version} has different bytes, so it is a fresh review"
+            )
+    same = [b for b in blocked if b[3] == digest]
+    if not same:
+        return False
+    if args.replace_blocked:
+        for h, n, v, d, kinds in same:
+            _notice(
+                f"--replace-blocked replaces the BLOCKED review of "
+                f"{h}/{n} {v} (digest {d}, kinds: {kinds})"
+            )
+        return False
+    if args.override_blocked is not None:
+        return False
+    h, n, v, d, kinds = same[0]
+    print(
+        f"::error::these exact bytes (digest {d}) already have a committed "
+        f"BLOCKED review at {h}/{n} {v} ({kinds}), and a blocked answer "
+        f"sticks, so nothing was run or written for {handle}/{name} "
+        f"{version}. To publish it anyway, use the override "
+        f"flow: --override-blocked \"<reason>\" records the reason, who and "
+        f"when in the review. To replace the blocked review with a fresh one, "
+        f"pass --replace-blocked",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _review_one_version(args: argparse.Namespace) -> int:
     """Review ONE version and commit the artifact under ``reviews/``.
 
@@ -741,11 +809,14 @@ def _review_one_version(args: argparse.Namespace) -> int:
             max_chars=settings.max_chars,
         )
 
+    if _blocked_review_stands(root, handle, name, version, digest, args):
+        return 1
     block = review_one(body, settings, now=_now())
     if block.get("status") != "reviewed":
         print(
             f"::error::the review of {handle}/{name} {version} could not be "
-            f"obtained, so nothing was written. Run it again.",
+            f"obtained, so nothing was written. "
+            f"{take_discard_hint() or 'Run it again.'}",
             file=sys.stderr,
         )
         return 1
@@ -839,7 +910,8 @@ def _review_from_index(args: argparse.Namespace) -> int:
     signed index. This copies one into ``reviews/`` with its verdict, its
     findings and any override intact, so the publish gate has a committed
     artifact to read without paying for a second opinion that could differ
-    from the words users have already been shown.
+    from the words users have already been shown. It copies a live review
+    without running the instruction-file scan.
 
     THE DIGEST COMES FROM THE SIGNED RELEASE, NEVER FROM THE INDEX. The
     release statement is verified first and the review is copied only when
@@ -884,6 +956,8 @@ def _review_from_index(args: argparse.Namespace) -> int:
             f"is not a review of these bytes, so nothing was written.",
             file=sys.stderr,
         )
+        return 1
+    if _blocked_review_stands(root, handle, name, version, digest, args):
         return 1
     written = write_review(
         root, handle, name, version, Review(digest=digest, block=dict(block)),
@@ -971,6 +1045,14 @@ def cmd_check_reviews(args: argparse.Namespace) -> int:
                     f"{item_id} {label}: {REFUSE_ABSENT} (folder digest "
                     f"{_short(digest)}, reviewed digest none). {why}, so "
                     f"nothing has approved the bytes this version publishes."
+                )
+                continue
+            if found.block.get("status") != STATUS_REVIEWED:
+                rows.append((item_id, label, "none", "refused, unavailable"))
+                refused.append(
+                    f"{item_id} {label}: {REFUSE_UNAVAILABLE} (folder digest "
+                    f"{_short(digest)}). The committed file records no "
+                    f"completed review, so nothing has approved these bytes."
                 )
                 continue
             verdict = _verdict_of(found.block)
@@ -1180,6 +1262,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="publish a blocked version anyway, writing this reason, who you "
              "are and when into the committed review. It never changes the "
              "verdict",
+    )
+    look.add_argument(
+        "--replace-blocked", action="store_true",
+        help="overwrite a committed BLOCKED review of the same bytes with a "
+             "fresh one. Without it a blocked answer sticks; the way to "
+             "publish a blocked item is --override-blocked",
     )
     look.add_argument(
         "--require-clean", action="store_true",

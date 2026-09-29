@@ -126,15 +126,55 @@ security checklist. it returns a `verdict` of `clean`, `flagged` or `blocked`.
 five kinds of finding block a publish: `prompt_injection`, `credential_access`,
 `obfuscation`, `opaque_payload` and `settings_write`. each is something no
 legitimate skill in a public catalog needs to do, so a publish stops rather
-than a reader being asked to notice a warning. the other six, `network`,
+than a reader being asked to notice a warning. the other seven, `instructions_write`, `network`,
 `shell_exec`, `file_delete`, `privilege`, `description_mismatch` and `other`,
 are advisory: a skill that fetches documentation or runs a command is doing its
 job, and the detail names the host or the path so a human can judge.
 
+`settings_write` (blocking) is an edit to a file that grants capability:
+`settings.json`, `settings.local.json`, `managed-settings.json`, `.mcp.json`,
+`~/.claude.json`, `~/.codex/config.toml`, a permission allow or deny list, a
+hook or a script a hook runs, a shell rc file, or any file under
+`.claude/agents/` or `.claude/commands/`, or another skill's `SKILL.md`,
+whatever its frontmatter says (an agent file with no tools line inherits every
+tool).
+
+`instructions_write` (advisory, a warning only) is a skill that creates,
+appends to, rewrites or deletes lines in a plain-prose agent instruction file:
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`, `MEMORY.md`,
+any `.md` file under `.claude/rules/`, `GEMINI.md`,
+`.github/copilot-instructions.md`, files under `.cursor/rules/` or the legacy
+`.cursorrules`, and `.windsurfrules`, in any directory. it covers only the act of editing, and the
+finding's detail names the file or files. what the skill writes into the file
+is judged as if it said it to the agent directly: text that overrides the
+user's rules is `prompt_injection`, text that tells a later agent to edit
+settings is `settings_write`, a secret read or an `@path` import of one is
+`credential_access`, and text or an import that is downloaded, generated or not
+shown to the reviewer is `opaque_payload`. each is reported as its own finding
+beside the `instructions_write` one.
+
+**app compatibility.** Carnivore app builds before the forward-compatible-kinds
+release do not know `instructions_write`, and they drop an item whose review
+carries a kind they do not know. the catalog holds items with this kind until
+that release is out.
+
+**a blocked answer sticks.** findings that derive `blocked` keep the answer and
+record `blocked` even when the model stated a softer verdict, and a committed
+blocked review of the same bytes is not overwritten unless `review` is run with
+`--replace-blocked`. the way to publish a blocked item is `--override-blocked`.
+the check is on the digest, so the same bytes under a new version or a new name
+are refused too. the residue: a blocking finding next to some OTHER malformed
+field (a bad line number, a misspelled kind, an empty summary) is still
+discarded as `unavailable` and needs a human re-run. that is not absolute.
+
+**the reviewer model** is `anthropic/claude-sonnet-5.5`, set by `review_model`
+in `catalog.yml`.
+
 **the verdict is re-derived, never taken on trust.** the model is asked for it
 so its answer is self consistent, and then the verdict is recomputed from the
 findings and compared. a model that lists a blocking finding and calls itself
-clean has its whole answer discarded, which records `unavailable`. the same
+clean is recorded `blocked`; only a stated verdict stricter than its findings
+is discarded, which records `unavailable`. the same
 re-derivation runs on a committed review when it is read, so hand editing the
 verdict in the file refuses the file rather than publishing it.
 
