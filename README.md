@@ -126,7 +126,7 @@ security checklist. it returns a `verdict` of `clean`, `flagged` or `blocked`.
 five kinds of finding block a publish: `prompt_injection`, `credential_access`,
 `obfuscation`, `opaque_payload` and `settings_write`. each is something no
 legitimate skill in a public catalog needs to do, so a publish stops rather
-than a reader being asked to notice a warning. the other six, `network`,
+than a reader being asked to notice a warning. the other seven, `instructions_write` (an edit to `CLAUDE.md` or `AGENTS.md`, which warns rather than blocks), `network`,
 `shell_exec`, `file_delete`, `privilege`, `description_mismatch` and `other`,
 are advisory: a skill that fetches documentation or runs a command is doing its
 job, and the detail names the host or the path so a human can judge.

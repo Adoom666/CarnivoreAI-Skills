@@ -126,7 +126,7 @@ def test_the_blocking_kinds_are_the_ones_that_block() -> None:
         )
     advisory = {
         "network", "shell_exec", "file_delete", "privilege",
-        "description_mismatch", "other",
+        "description_mismatch", "other", "instructions_write",
     }
     for kind in advisory:
         assert derive_verdict([{"kind": kind}]) == "flagged", (
@@ -244,3 +244,26 @@ def test_skill_md_is_always_first() -> None:
     """The cap falls on the least important files last, by construction."""
     body = _staged_body("opaque_payload")
     assert body.startswith("--- SKILL.md")
+
+
+def test_instructions_write_alone_is_flagged_and_with_settings_write_is_blocked() -> None:
+    """Editing CLAUDE.md or AGENTS.md warns; editing settings still blocks."""
+    only = {"kind": "instructions_write"}
+    assert "instructions_write" not in BLOCKING_KINDS
+    assert derive_verdict([only]) == "flagged"
+    assert derive_verdict([only, {"kind": "settings_write"}]) == "blocked"
+
+
+def test_parse_review_accepts_instructions_write() -> None:
+    """The new kind survives the closed-list check with a flagged verdict."""
+    verdict, _summary, warnings = parse_review(json.dumps({
+        "verdict": "flagged",
+        "summary": "appends a rule to CLAUDE.md.",
+        "warnings": [{
+            "kind": "instructions_write",
+            "detail": "appends a rule to CLAUDE.md.",
+            "file": "SKILL.md",
+        }],
+    }))
+    assert verdict == "flagged"
+    assert [w["kind"] for w in warnings] == ["instructions_write"]
