@@ -56,6 +56,16 @@
       }
     },
     {
+      "name": "scrooge",
+      "source": "./skills/adoom666/scrooge",
+      "description": "Use when you want to audit your Claude Code setup for wasted time, tokens and money.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Adoom666",
+        "url": "https://github.com/Adoom666"
+      }
+    },
+    {
       "name": "sme",
       "source": "./skills/adoom666/sme",
       "description": "Invoke when user says \"SME\", \"You're a SME\", or wants expert-level problem solving.",

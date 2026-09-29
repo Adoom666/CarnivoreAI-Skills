@@ -1,0 +1,43 @@
+{
+  "digest": "1fa26a636847fa4d6375100dcbca8d2536682013be127449802b8a82c70ed80d",
+  "status": "reviewed",
+  "verdict": "flagged",
+  "summary": "scrooge audits claude code spend by running a read-only python scanner over local transcript jsonl files, then recommends cost levers. It may trim the user's CLAUDE.md or AGENTS.md, but only after a backup, a shown diff and the user's yes. Settings, hooks and agent files are only printed as snippets for the user to apply. The description discloses all of this. No network access, no secret access, no obfuscation and no hidden behaviour were found, only advisory items.",
+  "warnings": [
+    {
+      "kind": "instructions_write",
+      "detail": "the skill edits the user's CLAUDE.md and AGENTS.md (trims and orchestrator rules) through a backup, diff and user-yes gate; the text it adds is benign cost and worker-bound guidance.",
+      "file": "SKILL.md"
+    },
+    {
+      "kind": "shell_exec",
+      "detail": "the skill tells the agent to run scripts/scan_spend.py, scripts/backup.sh and a grep over transcripts to extract only the model field.",
+      "file": "SKILL.md"
+    },
+    {
+      "kind": "other",
+      "detail": "the scanner reads transcript jsonl and .meta.json files under ~/.claude/projects (or CLAUDE_CONFIG_DIR) but extracts only token counts, model ids, timestamps, record types, ids, project folder names and sub-agent short descriptions, and prints aggregates locally without message text.",
+      "file": "scripts/scan_spend.py"
+    },
+    {
+      "kind": "instructions_write",
+      "detail": "may edit CLAUDE.md, AGENTS.md, MEMORY.md",
+      "file": "reference/levers.md",
+      "line": 3
+    },
+    {
+      "kind": "instructions_write",
+      "detail": "may edit CLAUDE.md, MEMORY.md",
+      "file": "reference/mechanics.md",
+      "line": 18
+    },
+    {
+      "kind": "instructions_write",
+      "detail": "may edit CLAUDE.md, AGENTS.md, MEMORY.md",
+      "file": "reference/trim-playbook.md",
+      "line": 7
+    }
+  ],
+  "model": "anthropic/claude-sonnet-5.5",
+  "reviewed_at": "2026-09-29T05:42:16Z"
+}

@@ -1,0 +1,16 @@
+{
+  "as_of": "2026-09-28",
+  "note": "List prices in USD per million tokens (API list-price equivalents). VERIFY on the vendor pricing page before trusting any dollar figure; prices change and differ by plan and model version. Edit this file, not the scanner. Prices are looked up by EXACT model id first; a family substring match is only a fallback and the scanner prints a WARNING listing every model id priced that way. A model set to null (or listed in unpriced_families) is never priced: its tokens are reported with '$ unknown'.",
+  "source": "Vendor list prices (Opus 5.5, Sonnet 5 / 5.5, Haiku 4.5), September 2026. Verify against the vendor pricing page, especially Haiku.",
+  "fields": ["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"],
+  "models": {
+    "claude-opus-5":             {"input": 5, "output": 25, "cache_write_5m": 6.25, "cache_write_1h": 10, "cache_read": 0.50},
+    "claude-opus-5-5":           {"input": 4, "output": 20, "cache_write_5m": 5,    "cache_write_1h": 8, "cache_read": 0.20},
+    "claude-sonnet-5":           {"input": 2, "output": 10, "cache_write_5m": 2.50, "cache_write_1h": 4, "cache_read": 0.20},
+    "claude-sonnet-5-5":         {"input": 2, "output": 10, "cache_write_5m": 2.50, "cache_write_1h": 4, "cache_read": 0.20},
+    "claude-haiku-4-5-20251001": {"input": 1, "output": 5,  "cache_write_5m": 1.25, "cache_write_1h": 2, "cache_read": 0.10}
+  },
+  "families": {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5-20251001"},
+  "match_order": ["opus", "sonnet", "haiku"],
+  "unpriced_families": ["fable"]
+}
