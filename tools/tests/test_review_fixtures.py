@@ -386,6 +386,26 @@ def test_merge_never_evicts_a_blocking_finding() -> None:
     assert merge_findings(model, [_adv("instructions_write", "SKILL.md")]) == model
 
 
+def test_merge_keeps_the_model_findings_when_it_already_reported_instructions_write() -> None:
+    model = [_adv("instructions_write", "SKILL.md")] + [
+        _adv("network", f"h{i}.md") for i in range(MAX_WARNINGS - 1)
+    ]
+    assert merge_findings(model, [_adv("instructions_write", "ref/x.md")]) == model
+
+
+@pytest.mark.parametrize("line", [
+    "Paste this block into your CLAUDE.md",
+    "Condense CLAUDE.md",
+    "Clean up CLAUDE.md",
+    "Keep MEMORY.md up to date",
+    "shutil.copy(src, 'CLAUDE.md')",
+    "sponge CLAUDE.md",
+    "dd of=CLAUDE.md",
+])
+def test_precheck_flags_the_second_round_phrasings(line: str) -> None:
+    assert precheck_instruction_writes(_pack(("SKILL.md", line)))
+
+
 def test_precheck_matches_a_shell_append() -> None:
     (finding,) = precheck_instruction_writes(_pack(("run.sh", "echo x >> AGENTS.md")))
     assert "AGENTS.md" in finding["detail"]

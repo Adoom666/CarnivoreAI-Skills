@@ -162,6 +162,10 @@ that release is out.
 record `blocked` even when the model stated a softer verdict, and a committed
 blocked review of the same bytes is not overwritten unless `review` is run with
 `--replace-blocked`. the way to publish a blocked item is `--override-blocked`.
+the check is on the digest, so the same bytes under a new version or a new name
+are refused too. the residue: a blocking finding next to some OTHER malformed
+field (a bad line number, a misspelled kind, an empty summary) is still
+discarded as `unavailable` and needs a human re-run. that is not absolute.
 
 **the reviewer model** is `anthropic/claude-sonnet-5.5`, set by `review_model`
 in `catalog.yml`.
@@ -169,7 +173,8 @@ in `catalog.yml`.
 **the verdict is re-derived, never taken on trust.** the model is asked for it
 so its answer is self consistent, and then the verdict is recomputed from the
 findings and compared. a model that lists a blocking finding and calls itself
-clean has its whole answer discarded, which records `unavailable`. the same
+clean is recorded `blocked`; only a stated verdict stricter than its findings
+is discarded, which records `unavailable`. the same
 re-derivation runs on a committed review when it is read, so hand editing the
 verdict in the file refuses the file rather than publishing it.
 

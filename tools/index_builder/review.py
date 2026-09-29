@@ -249,7 +249,10 @@ SYSTEM_PROMPT = (
     "report each kind at most once per file, at the first place it applies. "
     "if it applies at more places in that file, say so in a few words in that "
     "finding's detail instead of adding findings. no two findings may share "
-    "both kind and file.\n\n"
+    "both kind and file.\n"
+    "list at most twelve findings in total. if more apply, keep every "
+    "BLOCKING finding and fold advisory findings of the same kind into one "
+    "finding whose detail names the files.\n\n"
 
     "verdict is DERIVED, not judged. Write your warnings list first, then read "
     "it back: if EVEN ONE finding carries a kind marked BLOCKING above, the "
@@ -293,6 +296,9 @@ def check_verdict(verdict: object, warnings: Sequence[Dict[str, object]]) -> str
       the disagreement discards the WHOLE thing rather than being repaired.
       Repairing it would mean publishing a verdict the reviewer never gave,
       and the safe direction here is no review rather than a mended one.
+      parse_review corrects UPWARD first (findings that derive blocked
+      record blocked), so what reaches here is a stated verdict stricter
+      than its findings or one that is malformed with no blocking finding.
       Shared by the live parser and the committed artifact reader.
     Inputs: verdict (object) - what was stated. warnings (sequence) - the
       validated findings.
@@ -609,13 +615,15 @@ def parse_review(content: str) -> Tuple[str, str, List[Dict[str, object]]]:
       worse than none, and none is an honest state this index can carry.
 
       A BLOCKED DERIVATION WINS: findings that derive blocked keep the answer
-      and record blocked whatever the model stated.
+      and record blocked whatever the model stated. More than MAX_WARNINGS
+      findings are cut to that many, blocking kinds first.
 
       THE VERDICT IS RE-DERIVED, NEVER TAKEN ON TRUST. The model is asked
       for it so the answer is self consistent, and then it is recomputed
       from the findings and compared. A model that lists a blocking
-      finding and calls itself clean has its whole answer thrown away,
-      because the alternative is publishing a verdict nobody gave.
+      finding and calls itself clean is recorded blocked; only a stated
+      verdict STRICTER than its findings is thrown away, because the
+      alternative is publishing a verdict nobody gave.
     Inputs: content (str) - the assistant's message text.
     Output: (verdict, summary, warnings) - the verdict, the summary and
       the validated findings.
@@ -642,12 +650,6 @@ def parse_review(content: str) -> Tuple[str, str, List[Dict[str, object]]]:
     raw_warnings = parsed.get("warnings", [])
     if not isinstance(raw_warnings, list):
         raise ReviewUnavailable("the model's warnings field is not a list")
-    if len(raw_warnings) > MAX_WARNINGS:
-        raise ReviewUnavailable(
-            f"the model returned {len(raw_warnings)} warnings, more than the "
-            f"{MAX_WARNINGS} this index carries"
-        )
-
     warnings: List[Dict[str, object]] = []
     for entry in raw_warnings:
         if not isinstance(entry, dict):
@@ -664,21 +666,32 @@ def parse_review(content: str) -> Tuple[str, str, List[Dict[str, object]]]:
         assert isinstance(kind, str)
         warnings.append(normalise_finding(kind, detail, entry))
 
+    if len(warnings) > MAX_WARNINGS:
+        # TOO MANY FINDINGS IS NOT A REASON TO DROP THE ANSWER: thorough
+        # answers are the long ones. Keep twelve, blocking kinds first, then
+        # instructions_write, then the rest (sorted is stable), and let the
+        # verdict be derived from what is kept.
+        warnings = sorted(warnings, key=lambda f: (
+            0 if f["kind"] in BLOCKING_KINDS
+            else 1 if f["kind"] == "instructions_write" else 2
+        ))[:MAX_WARNINGS]
+
     stated = parsed.get("verdict")
-    if (
-        isinstance(stated, str) and stated in VERDICTS
-        and stated != VERDICT_BLOCKED
-        and derive_verdict(warnings) == VERDICT_BLOCKED
-    ):
-        # A BLOCKED ANSWER STICKS. The findings prove the block, so a model
-        # that called it something softer is corrected UPWARD, never thrown
-        # away, because discarding would send the version to a retry that
-        # could come back clean. The opposite mismatch (a stated verdict
-        # stricter than its findings) is still discarded below.
+    if derive_verdict(warnings) == VERDICT_BLOCKED:
+        # A BLOCKED ANSWER STICKS. The findings prove the block, so ANY
+        # stated verdict (missing, unknown, wrong case or softer) is
+        # corrected UPWARD, never thrown away, because discarding would
+        # send the version to a re-run that could come back clean. The
+        # opposite mismatch (a stated verdict stricter than its findings)
+        # is still discarded below.
         stated = VERDICT_BLOCKED
     try:
         verdict = check_verdict(stated, warnings)
     except ValueError as exc:
+        if stated == VERDICT_BLOCKED:
+            raise _StricterThanFindings(
+                f"the model's answer is not trustworthy: {exc}"
+            ) from exc
         raise ReviewUnavailable(f"the model's answer is not trustworthy: {exc}") from exc
 
     return verdict, summary.strip()[:MAX_SUMMARY_CHARS], warnings
@@ -743,7 +756,10 @@ _WRITE_RE = re.compile(
     r"\b(?:add|adds|adding)\b[^\n]*\bto\b|"
     r"\b(?:put|puts|record|records|set|cp|mv|rm|ln|install|"
     r"tee|Set-Content|Out-File|Add-Content)\b|"
-    r"\bsed\s+-\S*i|\bperl\s+-\S*i",
+    r"\bsed\s+-\S*i|\bperl\s+-\S*i|"
+    r"\b(?:past|copi|cop(?:y|ies)|plac|stor|condens|consolidat|restructur|"
+    r"reorganiz|split|generat|initiali|populat|truncat)\w*|"
+    r"\b(?:sponge|fill\s+in|clean\s+up|up\s+to\s+date|of=)\b|\bshutil\.copy",
     re.IGNORECASE,
 )
 _REDIRECT_RE = re.compile(r">{1,2}\s*[^\s|;&<>]*" + _NAME_RE.pattern, re.IGNORECASE)
@@ -841,6 +857,8 @@ def merge_findings(
     merged = list(model)
     for finding in extra:
         if len(merged) >= MAX_WARNINGS:
+            if any(f["kind"] == "instructions_write" for f in model):
+                break
             advisory = [
                 i for i, f in enumerate(merged) if f["kind"] not in BLOCKING_KINDS
             ]
@@ -855,8 +873,49 @@ def merge_findings(
 UNPARSEABLE_RETRIES = 2
 
 
+class _StricterThanFindings(ReviewUnavailable):
+    """The model stated blocked but named no blocking finding."""
+
+
+#: What the operator is told when the above discards an answer.
+STRICTER_HINT = (
+    "the reviewer said blocked but named no blocking finding; read the "
+    "skill before re-running"
+)
+
+
+_discard_hints: List[str] = []
+
+
+def take_discard_hint() -> str:
+    """The hint for the last discarded answer, or "". Read once, then cleared."""
+    hint = _discard_hints[-1] if _discard_hints else ""
+    _discard_hints.clear()
+    return hint
+
+
 class _NotJson(ReviewUnavailable):
     """The model's answer was truncated or was not a JSON object at all."""
+
+
+_BLOCK_HINT_RE = re.compile(
+    r'"verdict"\s*:\s*"blocked"|"kind"\s*:\s*"(?:'
+    + "|".join(sorted(BLOCKING_KINDS)) + ')"',
+    re.IGNORECASE,
+)
+
+
+def _names_a_block(content: str) -> bool:
+    """True when an unparseable answer already said blocked or listed a block."""
+    return _BLOCK_HINT_RE.search(content) is not None
+
+
+def _raw_content(response: Dict[str, object]) -> str:
+    """The answer text, or "" when the response carries none."""
+    try:
+        return _content_of(response)
+    except ReviewUnavailable:
+        return ""
 
 
 def _ask_model(payload: Dict[str, object], api_key: str):
@@ -877,6 +936,12 @@ def _ask_model(payload: Dict[str, object], api_key: str):
         try:
             return parse_review(_content_of(response))
         except _NotJson as exc:
+            if _names_a_block(_raw_content(response)):
+                raise ReviewUnavailable(
+                    "the partial answer named a blocking finding, so it is "
+                    "not asked for again; the skill needs a read before any "
+                    "re-run"
+                ) from exc
             print(f"::warning::review attempt {attempt} of {attempts}: {exc}")
             if attempt == attempts:
                 raise
@@ -899,6 +964,7 @@ def review_one(
     Output: the review block for the index.
     Example: review_one(text, settings, now="2026-09-15T00:00:00Z")["status"]
     """
+    _discard_hints.clear()
     if settings.api_key is None:
         return {"status": STATUS_UNAVAILABLE}
     payload = {
@@ -917,6 +983,9 @@ def review_one(
         verdict, summary, warnings = _ask_model(payload, settings.api_key)
     except ReviewUnavailable as exc:
         print(f"::warning::review unavailable: {exc}")
+        _discard_hints.append(
+            STRICTER_HINT if isinstance(exc, _StricterThanFindings) else ""
+        )
         return {"status": STATUS_UNAVAILABLE}
     warnings = merge_findings(warnings, precheck_instruction_writes(body))
     verdict = derive_verdict(warnings)

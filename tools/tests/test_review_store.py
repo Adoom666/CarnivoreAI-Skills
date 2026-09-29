@@ -719,3 +719,33 @@ def test_a_committed_blocked_review_is_not_overwritten_without_the_flag(
     assert _gate(root, folder, "--replace-blocked") == 0
     replaced = read_review(root, HANDLE, SKILL, VERSION)
     assert replaced is not None and replaced.block["verdict"] == "clean"
+
+
+def test_a_blocked_digest_sticks_under_a_new_version_and_a_new_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    """The guard is keyed on the digest, so renaming the bytes is no re-roll."""
+    root, _commit = _repo(tmp_path)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one",
+        lambda body, settings, *, now: _blocking_block(), raising=True,
+    )
+    folder = _staged(tmp_path)
+    assert _gate(root, folder) == 1
+
+    calls: list = []
+
+    def clean(body: str, settings: object, *, now: str) -> Dict[str, object]:
+        calls.append(1)
+        return {"status": "reviewed", "verdict": "clean", "summary": "ok",
+                "warnings": [], "model": "m", "reviewed_at": now}
+
+    monkeypatch.setattr(cli, "review_one", clean, raising=True)
+    capsys.readouterr()
+    assert _gate(root, folder, "--version", "9.9.9") == 1
+    assert _gate(root, folder, "--name", "renamed") == 1
+    assert "already have a committed BLOCKED review" in capsys.readouterr().err
+    assert not calls
+    assert _gate(root, folder, "--version", "9.9.9", "--replace-blocked") == 0
+    assert "--replace-blocked replaces the BLOCKED review" in capsys.readouterr().out

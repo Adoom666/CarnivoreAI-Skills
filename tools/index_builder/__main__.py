@@ -72,10 +72,12 @@ from .review import (
     collect_text,
     existing_review,
     review_one,
+    take_discard_hint,
 )
 from .review_store import (
     OVERRIDE_FIELD,
     OVERRIDE_KEYS,
+    REVIEWS_DIR,
     Review,
     ReviewArtifactInvalid,
     committed_review,
@@ -650,29 +652,62 @@ def _print_findings(block: Dict[str, object]) -> None:
         print(f"  {entry.get('kind')}  {where}  {entry.get('detail')}")
 
 
+def _blocked_reviews(root: Path) -> List[Tuple[str, str, str, str, str]]:
+    """Every committed BLOCKED review as (handle, name, version, digest, kinds)."""
+    found = []
+    for path in sorted((root / REVIEWS_DIR).glob("*/*/*.json")):
+        handle, name, version = path.parent.parent.name, path.parent.name, path.stem
+        stored = read_review(root, handle, name, version)
+        if stored is None or stored.block.get("verdict") != VERDICT_BLOCKED:
+            continue
+        warnings = stored.block.get("warnings")
+        kinds = sorted({
+            str(w.get("kind")) for w in warnings if isinstance(w, dict)
+        }) if isinstance(warnings, list) else []
+        found.append((handle, name, version, stored.digest, ", ".join(kinds)))
+    return found
+
+
 def _blocked_review_stands(
     root: Path, handle: str, name: str, version: str, digest: str,
     args: argparse.Namespace,
 ) -> bool:
-    """Refuse to overwrite a committed BLOCKED review of the same bytes.
+    """Refuse to write a review for a DIGEST that already has a blocked one.
 
     A blocked answer sticks: re-running the model until it stops saying
-    blocked is not a way to publish. The only ways past are
-    --replace-blocked, or --override-blocked, which keeps the verdict blocked
-    and records who waved it through. Prints why and returns True to refuse.
+    blocked is not a way to publish, and neither is resubmitting the same
+    bytes under a new version or a new name. The check is on the digest, over
+    every committed artifact. The only ways past are --replace-blocked, or
+    --override-blocked, which keeps the verdict blocked and records who waved
+    it through. Also warns about an earlier blocked version of the same
+    handle and name with different bytes. Prints why and returns True to
+    refuse.
     """
-    if args.replace_blocked or args.override_blocked is not None:
+    blocked = _blocked_reviews(root)
+    for h, n, v, d, kinds in blocked:
+        if (h, n) == (handle, name) and d != digest:
+            print(
+                f"::warning::{h}/{n} {v} was BLOCKED earlier ({kinds}); "
+                f"{version} has different bytes, so it is a fresh review"
+            )
+    same = [b for b in blocked if b[3] == digest]
+    if not same:
         return False
-    stored = read_review(root, handle, name, version)
-    if (
-        stored is None or stored.digest != digest
-        or stored.block.get("verdict") != VERDICT_BLOCKED
-    ):
+    if args.replace_blocked:
+        for h, n, v, d, kinds in same:
+            _notice(
+                f"--replace-blocked replaces the BLOCKED review of "
+                f"{h}/{n} {v} (digest {d}, kinds: {kinds})"
+            )
         return False
+    if args.override_blocked is not None:
+        return False
+    h, n, v, d, kinds = same[0]
     print(
-        f"::error::{handle}/{name} {version} already has a committed BLOCKED "
-        f"review for these exact bytes, and a blocked answer sticks, so "
-        f"nothing was run or written. To publish it anyway, use the override "
+        f"::error::these exact bytes (digest {d}) already have a committed "
+        f"BLOCKED review at {h}/{n} {v} ({kinds}), and a blocked answer "
+        f"sticks, so nothing was run or written for {handle}/{name} "
+        f"{version}. To publish it anyway, use the override "
         f"flow: --override-blocked \"<reason>\" records the reason, who and "
         f"when in the review. To replace the blocked review with a fresh one, "
         f"pass --replace-blocked",
@@ -780,7 +815,8 @@ def _review_one_version(args: argparse.Namespace) -> int:
     if block.get("status") != "reviewed":
         print(
             f"::error::the review of {handle}/{name} {version} could not be "
-            f"obtained, so nothing was written. Run it again.",
+            f"obtained, so nothing was written. "
+            f"{take_discard_hint() or 'Run it again.'}",
             file=sys.stderr,
         )
         return 1

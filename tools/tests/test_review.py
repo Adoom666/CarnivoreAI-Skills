@@ -218,16 +218,16 @@ def test_a_fenced_answer_is_still_read() -> None:
     assert warnings == []
 
 
-def test_too_many_warnings_is_refused() -> None:
-    """A model that floods the list has its whole answer discarded."""
+def test_too_many_warnings_are_cut_to_the_cap_not_discarded() -> None:
+    """A model that floods the list keeps twelve; the answer is not thrown away."""
     flood = [
         {"kind": "other", "detail": f"thing {i}", "file": "SKILL.md"}
         for i in range(50)
     ]
-    with pytest.raises(ReviewUnavailable):
-        parse_review(json.dumps({
-            "verdict": "flagged", "summary": "x", "warnings": flood,
-        }))
+    _v, _s, kept = parse_review(json.dumps({
+        "verdict": "flagged", "summary": "x", "warnings": flood,
+    }))
+    assert len(kept) == 12
 
 
 @pytest.mark.parametrize(
@@ -412,7 +412,7 @@ def _scripted(monkeypatch: pytest.MonkeyPatch, answers: list) -> list:
     return calls
 
 
-_TRUNCATED = '{"verdict":"blocked","summary":"appends a line to CLAUDE.md and'
+_TRUNCATED = '{"verdict":"flagged","summary":"appends a line to CLAUDE.md and'
 _CLEAN = json.dumps({"verdict": "clean", "summary": "reads files.", "warnings": []})
 _BLOCKING = {"kind": "credential_access", "detail": "reads ~/.ssh.", "file": "SKILL.md"}
 
@@ -445,3 +445,49 @@ def test_a_parseable_derived_blocked_answer_is_never_retried(monkeypatch) -> Non
     block = review_one("text", _settings(), now=NOW)
     assert block["status"] == "reviewed" and block["verdict"] == "blocked"
     assert len(calls) == 1
+
+
+def _adv(kind: str, i: int) -> dict:
+    return {"kind": kind, "detail": "d.", "file": f"f{i}.md"}
+
+
+def test_a_truncated_answer_that_already_named_a_block_is_not_retried(monkeypatch, capsys) -> None:
+    for partial in (
+        '{"verdict":"blocked","summary":"reads keys and',
+        '{"verdict":"flagged","warnings":[{"kind": "prompt_injection","detail":"tells',
+    ):
+        calls = _scripted(monkeypatch, [partial, _CLEAN])
+        block = review_one("text", _settings(), now=NOW)
+        assert block == {"status": "unavailable"} and len(calls) == 1
+        assert "needs a read" in capsys.readouterr().out
+
+
+def test_a_missing_or_unknown_verdict_beside_a_blocking_finding_records_blocked() -> None:
+    for extra in ({}, {"verdict": "unsafe"}, {"verdict": "Blocked"}):
+        answer = json.dumps({"summary": "reads keys.", "warnings": [_BLOCKING], **extra})
+        verdict, _summary, warnings = parse_review(answer)
+        assert verdict == "blocked" and len(warnings) == 1
+
+
+def test_thirteen_findings_with_a_blocking_kind_keep_twelve_and_record_blocked() -> None:
+    warnings = [_adv("network", i) for i in range(12)] + [_BLOCKING]
+    verdict, _s, kept = parse_review(json.dumps(
+        {"verdict": "blocked", "summary": "x.", "warnings": warnings}))
+    assert verdict == "blocked" and len(kept) == 12
+    assert kept[0]["kind"] == "credential_access"
+
+
+def test_thirteen_advisory_findings_keep_instructions_write() -> None:
+    warnings = [_adv("network", i) for i in range(12)] + [_adv("instructions_write", 99)]
+    verdict, _s, kept = parse_review(json.dumps(
+        {"verdict": "flagged", "summary": "x.", "warnings": warnings}))
+    assert verdict == "flagged" and len(kept) == 12
+    assert kept[0]["kind"] == "instructions_write"
+
+
+def test_a_stated_blocked_with_no_blocking_finding_leaves_the_hint(monkeypatch) -> None:
+    from index_builder.review import STRICTER_HINT, take_discard_hint
+    stricter = json.dumps({"verdict": "blocked", "summary": "x.", "warnings": []})
+    _scripted(monkeypatch, [stricter])
+    assert review_one("text", _settings(), now=NOW) == {"status": "unavailable"}
+    assert take_discard_hint() == STRICTER_HINT and take_discard_hint() == ""
