@@ -397,3 +397,51 @@ def test_a_reference_file_is_shown_and_a_binary_one_is_named(tmp_path: Path) -> 
     )
     assert "assets/payload.bin" in body and "128 bytes" in body
     assert "not utf-8 text" in body
+
+
+def _scripted(monkeypatch: pytest.MonkeyPatch, answers: list) -> list:
+    """Make the model return each answer in turn; the list counts the calls."""
+    calls: list = []
+
+    def post(url, payload, key):
+        calls.append(1)
+        return _completion(answers[min(len(calls), len(answers)) - 1])
+
+    monkeypatch.setattr(review_module, "_post", post, raising=True)
+    monkeypatch.setattr(review_module, "_content_of", lambda r: r["choices"][0]["message"]["content"], raising=True)
+    return calls
+
+
+_TRUNCATED = '{"verdict":"blocked","summary":"appends a line to CLAUDE.md and'
+_CLEAN = json.dumps({"verdict": "clean", "summary": "reads files.", "warnings": []})
+_BLOCKING = {"kind": "credential_access", "detail": "reads ~/.ssh.", "file": "SKILL.md"}
+
+
+def test_an_unparseable_answer_is_retried_and_the_valid_one_recorded(monkeypatch) -> None:
+    calls = _scripted(monkeypatch, [_TRUNCATED, _CLEAN])
+    block = review_one("text", _settings(), now=NOW)
+    assert block["status"] == "reviewed" and block["verdict"] == "clean"
+    assert len(calls) == 2
+
+
+def test_three_unparseable_answers_are_unavailable(monkeypatch, capsys) -> None:
+    calls = _scripted(monkeypatch, [_TRUNCATED])
+    block = review_one("text", _settings(key="secret-key-value"), now=NOW)
+    assert block == {"status": "unavailable"} and len(calls) == 3
+    out = capsys.readouterr().out
+    assert "attempt 3 of 3" in out and "secret-key-value" not in out
+
+
+def test_a_parseable_contradictory_answer_is_never_retried(monkeypatch) -> None:
+    stricter = json.dumps({"verdict": "blocked", "summary": "reads files.", "warnings": []})
+    calls = _scripted(monkeypatch, [stricter, _CLEAN])
+    block = review_one("text", _settings(), now=NOW)
+    assert block == {"status": "unavailable"} and len(calls) == 1
+
+
+def test_a_parseable_derived_blocked_answer_is_never_retried(monkeypatch) -> None:
+    softer = json.dumps({"verdict": "clean", "summary": "reads keys.", "warnings": [_BLOCKING]})
+    calls = _scripted(monkeypatch, [softer, _CLEAN])
+    block = review_one("text", _settings(), now=NOW)
+    assert block["status"] == "reviewed" and block["verdict"] == "blocked"
+    assert len(calls) == 1

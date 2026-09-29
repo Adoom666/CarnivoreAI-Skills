@@ -157,7 +157,14 @@ SYSTEM_PROMPT = (
     "  credential_access  BLOCKING  reads or transmits secrets. name the path. "
     "this includes ~/.ssh, ~/.aws, ~/.config/gcloud, the macos keychain, .env "
     "files, browser profile or cookie stores, and the agent's own ~/.claude or "
-    "~/.codex directory including any token, credential or session file in it\n"
+    "~/.codex directory including any token, credential or session file in it. "
+    "reading logs, session transcripts or shell history, which can hold "
+    "secrets by accident, is credential_access when the skill searches them "
+    "for secrets, prints or stores their text, or sends any of their content "
+    "off the machine. reading them only to count or summarize structure "
+    "(token counts, timestamps, record types) that it prints locally is not "
+    "credential_access: report it as other, and name what it reads in the "
+    "detail\n"
     "  obfuscation        BLOCKING  encoded, minified or otherwise hidden "
     "behaviour, including anything decoded or decompressed and then run. "
     "base64, hex or compressed text handed to exec, eval, a shell or an "
@@ -175,12 +182,14 @@ SYSTEM_PROMPT = (
     "under .claude/agents/ or .claude/commands/, or another skill's SKILL.md, "
     "whatever its frontmatter says (an agent file with no tools line inherits "
     "every tool)\n"
-    "  instructions_write           creates, appends to, rewrites or deletes "
-    "lines in a plain-prose agent instruction file: CLAUDE.md, "
-    "CLAUDE.local.md, AGENTS.md, AGENTS.override.md or MEMORY.md, in any "
-    "directory. it covers ONLY the act of editing. the finding's detail must "
-    "name the file or files. instructions_write alone is advisory. if any "
-    "blocking finding sits beside it, the verdict is blocked.\n"
+    "  instructions_write           the skill creates, appends to, rewrites "
+    "or deletes lines in a plain-prose agent instruction file: CLAUDE.md, "
+    "CLAUDE.local.md, AGENTS.md, AGENTS.override.md, MEMORY.md, any .md file "
+    "under .claude/rules/, GEMINI.md, .github/copilot-instructions.md, files "
+    "under .cursor/rules/ or the legacy .cursorrules, and .windsurfrules, in "
+    "any directory. it covers only the act of editing. the finding's detail "
+    "must name the file or files. instructions_write alone is advisory. if "
+    "any blocking finding sits beside it, the verdict is blocked.\n"
     "  network                      reaches the network. name the host. EVERY "
     "remote url the skill fetches is a finding, a documentation lookup "
     "included; it is advisory on its own and the human reads the host. a "
@@ -599,6 +608,9 @@ def parse_review(content: str) -> Tuple[str, str, List[Dict[str, object]]]:
       part. A half understood security review shown as a whole one is
       worse than none, and none is an honest state this index can carry.
 
+      A BLOCKED DERIVATION WINS: findings that derive blocked keep the answer
+      and record blocked whatever the model stated.
+
       THE VERDICT IS RE-DERIVED, NEVER TAKEN ON TRUST. The model is asked
       for it so the answer is self consistent, and then it is recomputed
       from the findings and compared. A model that lists a blocking
@@ -619,9 +631,9 @@ def parse_review(content: str) -> Tuple[str, str, List[Dict[str, object]]]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ReviewUnavailable("the model did not answer with a JSON object") from exc
+        raise _NotJson("the model did not answer with a JSON object") from exc
     if not isinstance(parsed, dict):
-        raise ReviewUnavailable("the model's answer is not a JSON object")
+        raise _NotJson("the model's answer is not a JSON object")
 
     summary = parsed.get("summary")
     if not isinstance(summary, str) or not summary.strip():
@@ -652,8 +664,20 @@ def parse_review(content: str) -> Tuple[str, str, List[Dict[str, object]]]:
         assert isinstance(kind, str)
         warnings.append(normalise_finding(kind, detail, entry))
 
+    stated = parsed.get("verdict")
+    if (
+        isinstance(stated, str) and stated in VERDICTS
+        and stated != VERDICT_BLOCKED
+        and derive_verdict(warnings) == VERDICT_BLOCKED
+    ):
+        # A BLOCKED ANSWER STICKS. The findings prove the block, so a model
+        # that called it something softer is corrected UPWARD, never thrown
+        # away, because discarding would send the version to a retry that
+        # could come back clean. The opposite mismatch (a stated verdict
+        # stricter than its findings) is still discarded below.
+        stated = VERDICT_BLOCKED
     try:
-        verdict = check_verdict(parsed.get("verdict"), warnings)
+        verdict = check_verdict(stated, warnings)
     except ValueError as exc:
         raise ReviewUnavailable(f"the model's answer is not trustworthy: {exc}") from exc
 
@@ -700,29 +724,49 @@ def normalise_finding(
     return finding
 
 
-#: The plain-prose agent instruction files whose edits are always surfaced.
+#: The plain-prose agent instruction files whose edits are always surfaced,
+#: matched as whole names. The path-shaped ones are in _NAME_RE below.
 INSTRUCTION_FILES = (
     "CLAUDE.local.md", "CLAUDE.md", "AGENTS.override.md", "AGENTS.md",
-    "MEMORY.md",
+    "MEMORY.md", "GEMINI.md", ".cursorrules", ".windsurfrules",
+    ".github/copilot-instructions.md",
 )
-_NAMES = "|".join(re.escape(n) for n in INSTRUCTION_FILES)
-_NAME_RE = re.compile(rf"(?<![\w.-])({_NAMES})(?![\w-])", re.IGNORECASE)
+_NAME_RE = re.compile(
+    r"(?<![\w.-])(" + "|".join(re.escape(n) for n in INSTRUCTION_FILES)
+    + r"|\.claude/rules/[^\s'\"`)]*?\.md|\.cursor/rules/[^\s'\"`)]*[\w])"
+    r"(?![\w-])",
+    re.IGNORECASE,
+)
 _WRITE_RE = re.compile(
     r"\b(?:edit|writ|wrote|append|updat|modif|trim|insert|replac|rewrit|"
     r"overwrit|creat|delet|remov|patch|chang|shorten|prun|sav|mov)\w*|"
-    r"\b(?:add|adds|adding|put|puts|record|records|set|cp|mv|rm|ln|install|"
+    r"\b(?:add|adds|adding)\b[^\n]*\bto\b|"
+    r"\b(?:put|puts|record|records|set|cp|mv|rm|ln|install|"
     r"tee|Set-Content|Out-File|Add-Content)\b|"
     r"\bsed\s+-\S*i|\bperl\s+-\S*i",
     re.IGNORECASE,
 )
-_READ_RE = re.compile(
-    r"\b(?:read|reads|reading|see|check|checks|follow|follows|per|load|"
-    r"loads|loaded|according\s+to)\b",
+_REDIRECT_RE = re.compile(r">{1,2}\s*[^\s|;&<>]*" + _NAME_RE.pattern, re.IGNORECASE)
+#: A code line that writes: the second line of the two-line form.
+_WRITE_CALL_RE = re.compile(
+    r"write_text|write_bytes|\bwrite\(|\.write\b|"
+    r"open\([^)]*['\"][wa][bt+]?['\"]|(?<![-=<|>])\s>{1,2}\s*\S|"
+    r"\btee\b|Set-Content|Out-File|Add-Content",
     re.IGNORECASE,
 )
-_REDIRECT_RE = re.compile(rf">{{1,2}}\s*[^\s|;&<>]*(?:{_NAMES})(?![\w-])", re.IGNORECASE)
+#: A code line that assigns a path naming an instruction file.
+_ASSIGN_RE = re.compile(r"^\s*[\w.]+\s*=\s*\S")
+_CODE_LOOKAHEAD = 2
 _FILE_HEADER_RE = re.compile(r"^--- (.+) \(mode \d+\) ---$")
 _UNSHOWN_TRAILER = "\n\n--- files in this skill you were NOT shown."
+
+
+def _canonical(name: str) -> str:
+    lowered = name.lower()
+    for known in INSTRUCTION_FILES:
+        if known.lower() == lowered:
+            return known
+    return name
 
 
 def precheck_instruction_writes(body: str) -> List[Dict[str, object]]:
@@ -730,10 +774,13 @@ def precheck_instruction_writes(body: str) -> List[Dict[str, object]]:
 
     Description: a deterministic floor under the model, because a small model
       misses the advisory kind on a large honest package. Runs over exactly the
-      text the model is shown. A line matches when it names one of
-      INSTRUCTION_FILES as a whole name, UNLESS it is plainly read-only (a
-      read-type verb and no write verb). Negated mentions still match. One finding per package file, at its first matching line, naming
-      every instruction file matched in that package file.
+      text the model is shown. A line matches when it names an instruction file
+      (INSTRUCTION_FILES, any .md under .claude/rules/, files under
+      .cursor/rules/) AND carries a write verb or shell write form, or assigns
+      it to a variable, or a write call (write_text, write(, open(.., 'w'/'a'),
+      >>, >) sits within the next two lines. Negated mentions still match.
+      One finding per package file, at its first matching line, naming every
+      instruction file matched in that package file.
     Inputs: body (str) - the text collect_text/collect_staged_text produced.
     Output: list of instructions_write findings (normalised).
     Example: precheck_instruction_writes("--- a.md (mode 644) ---\\nedit CLAUDE.md")
@@ -741,7 +788,8 @@ def precheck_instruction_writes(body: str) -> List[Dict[str, object]]:
     body = body.split(_UNSHOWN_TRAILER, 1)[0]
     found: Dict[str, Dict[str, object]] = {}
     current, number = None, 0
-    for text in body.split("\n"):
+    lines = body.split("\n")
+    for index, text in enumerate(lines):
         header = _FILE_HEADER_RE.match(text)
         if header:
             current, number = header.group(1), 0
@@ -749,19 +797,28 @@ def precheck_instruction_writes(body: str) -> List[Dict[str, object]]:
         number += 1
         if current is None:
             continue
-        names = {
-            m.group(1).lower() for m in _NAME_RE.finditer(text)
-        }
+        names = {_canonical(m.group(1)) for m in _NAME_RE.finditer(text)}
         if not names:
             continue
-        writes = _WRITE_RE.search(text) or _REDIRECT_RE.search(text)
-        if _READ_RE.search(text) and not writes:
+        window = [text] + [
+            t for t in lines[index + 1: index + 1 + _CODE_LOOKAHEAD]
+            if not _FILE_HEADER_RE.match(t)
+        ]
+        if not (
+            _WRITE_RE.search(text) or _REDIRECT_RE.search(text)
+            or _ASSIGN_RE.match(text)
+            or any(_WRITE_CALL_RE.search(t) for t in window)
+        ):
             continue
         entry = found.setdefault(current, {"line": number, "names": set()})
         entry["names"] |= names  # type: ignore[operator]
     findings = []
     for path, entry in found.items():
-        shown = [n for n in INSTRUCTION_FILES if n.lower() in entry["names"]]
+        shown = sorted(
+            entry["names"],  # type: ignore[arg-type]
+            key=lambda n: (INSTRUCTION_FILES.index(n)
+                           if n in INSTRUCTION_FILES else 99, n),
+        )
         findings.append(normalise_finding(
             "instructions_write",
             f"may edit {', '.join(shown)}",
@@ -792,6 +849,38 @@ def merge_findings(
             del merged[advisory[-1]]
         merged.append(finding)
     return merged
+
+
+#: How many times an answer that is not a JSON object is asked for again.
+UNPARSEABLE_RETRIES = 2
+
+
+class _NotJson(ReviewUnavailable):
+    """The model's answer was truncated or was not a JSON object at all."""
+
+
+def _ask_model(payload: Dict[str, object], api_key: str):
+    """Call the model, asking again ONLY when the answer is not JSON.
+
+    Description: the model sometimes returns JSON cut off mid-string. That
+      answer says nothing about the skill, so it is asked for again, up to
+      UNPARSEABLE_RETRIES more times. An answer that PARSES is never asked
+      for again, however contradictory: its handling is parse_review's.
+    Inputs: payload (dict) - the request. api_key (str) - never logged.
+    Output: (verdict, summary, warnings) from parse_review.
+    Raises: ReviewUnavailable when every attempt was unparseable or the call
+      itself failed.
+    """
+    attempts = UNPARSEABLE_RETRIES + 1
+    for attempt in range(1, attempts + 1):
+        response = _post(OPENROUTER_URL, payload, api_key)
+        try:
+            return parse_review(_content_of(response))
+        except _NotJson as exc:
+            print(f"::warning::review attempt {attempt} of {attempts}: {exc}")
+            if attempt == attempts:
+                raise
+    raise AssertionError("unreachable")
 
 
 def review_one(
@@ -825,8 +914,7 @@ def review_one(
         "temperature": 0,
     }
     try:
-        response = _post(OPENROUTER_URL, payload, settings.api_key)
-        verdict, summary, warnings = parse_review(_content_of(response))
+        verdict, summary, warnings = _ask_model(payload, settings.api_key)
     except ReviewUnavailable as exc:
         print(f"::warning::review unavailable: {exc}")
         return {"status": STATUS_UNAVAILABLE}

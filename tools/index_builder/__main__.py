@@ -417,7 +417,7 @@ def _review_settings(root: Path) -> ReviewSettings:
       somebody should be able to explain from the log alone.
     Inputs: root (Path) - the repository root, holding catalog.yml.
     Output: ReviewSettings; ``api_key`` is None when no usable key was set.
-    Example: _review_settings(Path(".")).model -> "google/gemini-2.5-flash-lite"
+    Example: _review_settings(Path(".")).model -> "anthropic/claude-sonnet-5.5"
 
     THE KEY IS NEVER LOGGED. It is read here, handed to one Authorization
     header, and nothing else in this process sees it.
@@ -650,6 +650,37 @@ def _print_findings(block: Dict[str, object]) -> None:
         print(f"  {entry.get('kind')}  {where}  {entry.get('detail')}")
 
 
+def _blocked_review_stands(
+    root: Path, handle: str, name: str, version: str, digest: str,
+    args: argparse.Namespace,
+) -> bool:
+    """Refuse to overwrite a committed BLOCKED review of the same bytes.
+
+    A blocked answer sticks: re-running the model until it stops saying
+    blocked is not a way to publish. The only ways past are
+    --replace-blocked, or --override-blocked, which keeps the verdict blocked
+    and records who waved it through. Prints why and returns True to refuse.
+    """
+    if args.replace_blocked or args.override_blocked is not None:
+        return False
+    stored = read_review(root, handle, name, version)
+    if (
+        stored is None or stored.digest != digest
+        or stored.block.get("verdict") != VERDICT_BLOCKED
+    ):
+        return False
+    print(
+        f"::error::{handle}/{name} {version} already has a committed BLOCKED "
+        f"review for these exact bytes, and a blocked answer sticks, so "
+        f"nothing was run or written. To publish it anyway, use the override "
+        f"flow: --override-blocked \"<reason>\" records the reason, who and "
+        f"when in the review. To replace the blocked review with a fresh one, "
+        f"pass --replace-blocked",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _review_one_version(args: argparse.Namespace) -> int:
     """Review ONE version and commit the artifact under ``reviews/``.
 
@@ -743,6 +774,8 @@ def _review_one_version(args: argparse.Namespace) -> int:
             max_chars=settings.max_chars,
         )
 
+    if _blocked_review_stands(root, handle, name, version, digest, args):
+        return 1
     block = review_one(body, settings, now=_now())
     if block.get("status") != "reviewed":
         print(
@@ -887,6 +920,8 @@ def _review_from_index(args: argparse.Namespace) -> int:
             f"is not a review of these bytes, so nothing was written.",
             file=sys.stderr,
         )
+        return 1
+    if _blocked_review_stands(root, handle, name, version, digest, args):
         return 1
     written = write_review(
         root, handle, name, version, Review(digest=digest, block=dict(block)),
@@ -1191,6 +1226,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="publish a blocked version anyway, writing this reason, who you "
              "are and when into the committed review. It never changes the "
              "verdict",
+    )
+    look.add_argument(
+        "--replace-blocked", action="store_true",
+        help="overwrite a committed BLOCKED review of the same bytes with a "
+             "fresh one. Without it a blocked answer sticks; the way to "
+             "publish a blocked item is --override-blocked",
     )
     look.add_argument(
         "--require-clean", action="store_true",

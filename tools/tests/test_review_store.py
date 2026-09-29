@@ -688,3 +688,34 @@ def test_the_gate_reads_every_file_in_the_staged_folder(
     assert _gate(root, folder) == 0
     assert "--- references/rules.md (mode 100644) ---" in seen["body"]
     assert "~/.aws/credentials" in seen["body"]
+
+
+def test_a_committed_blocked_review_is_not_overwritten_without_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    """A blocked answer sticks: a re-run cannot quietly replace it."""
+    root, _commit = _repo(tmp_path)
+    monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
+    monkeypatch.setattr(
+        cli, "review_one",
+        lambda body, settings, *, now: _blocking_block(), raising=True,
+    )
+    folder = _staged(tmp_path)
+    assert _gate(root, folder) == 1
+    first = read_review(root, HANDLE, SKILL, VERSION)
+    assert first is not None and first.block["verdict"] == "blocked"
+
+    def clean(body: str, settings: object, *, now: str) -> Dict[str, object]:
+        return {"status": "reviewed", "verdict": "clean", "summary": "ok",
+                "warnings": [], "model": "m", "reviewed_at": now}
+
+    monkeypatch.setattr(cli, "review_one", clean, raising=True)
+    capsys.readouterr()
+    assert _gate(root, folder) == 1
+    assert "--override-blocked" in capsys.readouterr().err
+    kept = read_review(root, HANDLE, SKILL, VERSION)
+    assert kept is not None and kept.block["verdict"] == "blocked"
+
+    assert _gate(root, folder, "--replace-blocked") == 0
+    replaced = read_review(root, HANDLE, SKILL, VERSION)
+    assert replaced is not None and replaced.block["verdict"] == "clean"

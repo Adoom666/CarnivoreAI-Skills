@@ -134,14 +134,17 @@ job, and the detail names the host or the path so a human can judge.
 `settings_write` (blocking) is an edit to a file that grants capability:
 `settings.json`, `settings.local.json`, `managed-settings.json`, `.mcp.json`,
 `~/.claude.json`, `~/.codex/config.toml`, a permission allow or deny list, a
-hook or a script a hook runs, a shell rc file, or any markdown whose
-frontmatter grants tools, a model, a permission mode or hooks
-(`.claude/agents/*.md`, `.claude/commands/*.md`, another skill's `SKILL.md`).
+hook or a script a hook runs, a shell rc file, or any file under
+`.claude/agents/` or `.claude/commands/`, or another skill's `SKILL.md`,
+whatever its frontmatter says (an agent file with no tools line inherits every
+tool).
 
 `instructions_write` (advisory, a warning only) is a skill that creates,
 appends to, rewrites or deletes lines in a plain-prose agent instruction file:
-`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md` or
-`MEMORY.md`, in any directory. it covers only the act of editing, and the
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`, `MEMORY.md`,
+any `.md` file under `.claude/rules/`, `GEMINI.md`,
+`.github/copilot-instructions.md`, files under `.cursor/rules/` or the legacy
+`.cursorrules`, and `.windsurfrules`, in any directory. it covers only the act of editing, and the
 finding's detail names the file or files. what the skill writes into the file
 is judged as if it said it to the agent directly: text that overrides the
 user's rules is `prompt_injection`, text that tells a later agent to edit
@@ -154,6 +157,14 @@ beside the `instructions_write` one.
 release do not know `instructions_write`, and they drop an item whose review
 carries a kind they do not know. the catalog holds items with this kind until
 that release is out.
+
+**a blocked answer sticks.** findings that derive `blocked` keep the answer and
+record `blocked` even when the model stated a softer verdict, and a committed
+blocked review of the same bytes is not overwritten unless `review` is run with
+`--replace-blocked`. the way to publish a blocked item is `--override-blocked`.
+
+**the reviewer model** is `anthropic/claude-sonnet-5.5`, set by `review_model`
+in `catalog.yml`.
 
 **the verdict is re-derived, never taken on trust.** the model is asked for it
 so its answer is self consistent, and then the verdict is recomputed from the
