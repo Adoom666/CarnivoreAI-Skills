@@ -206,7 +206,7 @@ def parse_artifact(raw: object, where: str) -> Review:
         detail = entry.get("detail")
         if kind not in WARNING_KINDS:
             raise ReviewArtifactInvalid(
-                f"{where}: the warning kind {kind!r} is not one of the eleven "
+                f"{where}: the warning kind {kind!r} is not one of the twelve "
                 f"the app can render"
             )
         if not isinstance(detail, str) or not detail.strip():

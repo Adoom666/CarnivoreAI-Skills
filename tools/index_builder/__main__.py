@@ -63,6 +63,7 @@ from .releases import (
     verify_release,
 )
 from .review import (
+    STATUS_REVIEWED,
     VERDICT_BLOCKED,
     VERDICT_CLEAN,
     ReviewSettings,
@@ -98,6 +99,7 @@ SIGNING_SECRET_ENV = "INDEX_SIGNING_SECRET_VALUE"
 REFUSE_ABSENT = "no committed review for these bytes"
 REFUSE_STALE = "committed review is for a different digest"
 REFUSE_BLOCKED = "blocked without override"
+REFUSE_UNAVAILABLE = "committed review is unavailable, re-run the review"
 
 
 def _notice(message: str) -> None:
@@ -839,7 +841,8 @@ def _review_from_index(args: argparse.Namespace) -> int:
     signed index. This copies one into ``reviews/`` with its verdict, its
     findings and any override intact, so the publish gate has a committed
     artifact to read without paying for a second opinion that could differ
-    from the words users have already been shown.
+    from the words users have already been shown. It copies a live review
+    without running the instruction-file scan.
 
     THE DIGEST COMES FROM THE SIGNED RELEASE, NEVER FROM THE INDEX. The
     release statement is verified first and the review is copied only when
@@ -971,6 +974,14 @@ def cmd_check_reviews(args: argparse.Namespace) -> int:
                     f"{item_id} {label}: {REFUSE_ABSENT} (folder digest "
                     f"{_short(digest)}, reviewed digest none). {why}, so "
                     f"nothing has approved the bytes this version publishes."
+                )
+                continue
+            if found.block.get("status") != STATUS_REVIEWED:
+                rows.append((item_id, label, "none", "refused, unavailable"))
+                refused.append(
+                    f"{item_id} {label}: {REFUSE_UNAVAILABLE} (folder digest "
+                    f"{_short(digest)}). The committed file records no "
+                    f"completed review, so nothing has approved these bytes."
                 )
                 continue
             verdict = _verdict_of(found.block)
