@@ -39,8 +39,8 @@ _HIDING_FRONT_RE = re.compile(
     re.MULTILINE,
 )
 #: The inline shell injection form (a bang then a backtick) and the fenced
-#: bang block.
-_SHELL_RE = re.compile(r"!`|^\s*```!", re.MULTILINE)
+#: bang block, matched anywhere in the text like the harness does.
+_SHELL_RE = re.compile(r"!`|```!")
 
 
 def content_problem(path: str, data: bytes) -> str:
@@ -60,6 +60,8 @@ def content_problem(path: str, data: bytes) -> str:
     except UnicodeDecodeError:
         return "not utf-8"
     text = text.lstrip("﻿")
+    # A lone CR is a line break to the YAML parser: fold every break to LF.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if text.startswith("#!"):
         return "shebang"
     if path.lower().endswith(".md"):

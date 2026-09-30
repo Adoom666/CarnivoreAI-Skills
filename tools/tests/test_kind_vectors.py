@@ -23,7 +23,7 @@ from index_builder.kind_rules import validate_folder
 
 VECTORS_PATH = Path(__file__).resolve().parent / "fixtures" / "kind_vectors.json"
 #: The same value the product repository pins for its copy.
-VECTORS_SHA256 = "3b83039597de6d820d14efa66cbc5d411860863c3546879d1a1d82702c918475"
+VECTORS_SHA256 = "a3afcec293b6d281fee09ad5fce1926b308d07fd2d8a47f55a919389b47200e3"
 VECTORS = json.loads(VECTORS_PATH.read_text(encoding="utf-8"))["vectors"]
 
 
