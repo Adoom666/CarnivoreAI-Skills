@@ -153,6 +153,17 @@ def test_the_author_is_the_publishers_declared_github_login() -> None:
     assert author["url"] == "https://github.com/SomeoneElse"
 
 
+def test_an_email_publisher_is_credited_by_handle_with_no_url() -> None:
+    """An email publisher has no GitHub account, so no login and no link."""
+    record = PublisherRecord(
+        handle=HANDLE, github_login="", keys=(), active_keys={}, identity="email",
+    )
+    document = build_marketplace(
+        [_item("sme")], repo_slug=SLUG, publishers={HANDLE: record},
+    )
+    assert document["plugins"][0]["author"] == {"name": HANDLE}
+
+
 def test_an_item_whose_publisher_is_not_declared_is_refused() -> None:
     """An entry naming an author nobody declared would be a made up claim."""
     with pytest.raises(MarketplaceRefused) as caught:

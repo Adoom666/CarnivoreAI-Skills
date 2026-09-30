@@ -182,15 +182,18 @@ def plugin_entry(
             f"there is no publishers/{handle}.json"
         )
 
+    # An email publisher has no GitHub account: credit the handle, no url.
+    author = (
+        {"name": handle}
+        if record.identity == "email"
+        else {"name": record.github_login, "url": _github_url(record.github_login)}
+    )
     return {
         "name": name,
         "source": f"./{SKILLS_DIR}/{handle}/{name}",
         "description": brief,
         "version": latest,
-        "author": {
-            "name": record.github_login,
-            "url": _github_url(record.github_login),
-        },
+        "author": author,
     }
 
 
@@ -219,8 +222,11 @@ def build_marketplace(
     entries: List[Dict[str, object]] = []
     claimed: Dict[str, str] = {}
     for item in items:
-        if item.get("kind") == "loadout":
-            continue  # a pack of pinned skills, not a plugin folder
+        if item.get("kind", "skill") != "skill":
+            # a loadout is a pack of pinned skills, and a theme or plugin
+            # installs only through the app's verified installer: listing
+            # one here would hand `claude plugin install` an unreviewed route
+            continue
         entry = plugin_entry(item, publishers=publishers)
         name = str(entry["name"])
         item_id = str(item.get("id", name))

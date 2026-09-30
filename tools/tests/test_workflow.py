@@ -393,3 +393,15 @@ def test_a_malformed_override_does_not_let_a_blocked_review_through(tmp_path) ->
         f"stderr: {result.stderr}"
     )
     assert "unreadable" in result.stdout, result.stdout
+
+
+def test_theme_and_plugin_folders_trigger_the_build_and_site_needs_an_owner() -> None:
+    """A commit touching only a theme or plugin runs the proof; site/ has an owner.
+
+    Themes and plugins are published items like skills, and the site
+    directory ships the admin bundle, so its owner line is what stops an
+    unreviewed bundle reaching the host.
+    """
+    paths = _triggers(_document())["push"]["paths"]
+    assert {"themes/**", "plugins/**"} <= set(paths), paths
+    assert "site/**" in _codeowner_paths()

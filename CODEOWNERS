@@ -1,5 +1,6 @@
 # everything that decides what gets signed, or that holds a secret boundary,
-# needs the owner on the pull request. a skill folder does not: the release
+# needs the owner on the pull request. a skill, theme or plugin folder does
+# not (skills/, themes/, plugins/, releases/): the release
 # statement inside it is signed by its own publisher's key and the build job
 # refuses anything that is not.
 # the generated marketplace file decides, for every plugin name, whose
@@ -13,4 +14,8 @@ publishers/**   @Adoom666
 # text this repository vouches for.
 reviews/**      @Adoom666
 catalog.yml     @Adoom666
+# everything under site/ is deployed verbatim in the zip the build makes, and
+# site/admin is the admin bundle that holds the admin token, so a change to it
+# is a change to who can approve what gets signed.
+site/**         @Adoom666
 CODEOWNERS      @Adoom666

@@ -39,16 +39,25 @@ class PublisherRecord:
     """One publisher as the repository declares them.
 
     - ``handle``: the folder name under ``skills/`` and ``releases/``.
-    - ``github_login``: who the handle belongs to, for the index.
+    - ``github_login``: who the handle belongs to, for the index. Empty
+      only when ``identity`` is ``email``.
     - ``keys``: every key as declared, verbatim, for the index document.
     - ``active_keys``: the parsed subset a signature may verify under,
       keyed by key id.
+    - ``identity``: ``email`` for a handle that is NOT a GitHub account (an
+      email sign-up, which carries no ``github_login``), else empty. Additive: the app ignores
+      extra publisher keys, so a shipped app is unaffected.
     """
 
     handle: str
     github_login: str
     keys: Tuple[Dict[str, str], ...]
     active_keys: Dict[str, PublicKey]
+    identity: str = ""
+
+
+#: The only identity marker accepted: an email sign-up, which has no GitHub login.
+IDENTITY_EMAIL = "email"
 
 
 def _parse_record(handle: str, raw: object) -> PublisherRecord:
@@ -71,8 +80,15 @@ def _parse_record(handle: str, raw: object) -> PublisherRecord:
             f"publishers/{handle}.json declares handle {declared!r}, "
             f"which is not its filename"
         )
-    login = raw.get("github_login")
-    if not isinstance(login, str) or not login:
+    identity = raw.get("identity", "")
+    if identity not in ("", IDENTITY_EMAIL):
+        raise ValueError(
+            f"publishers/{handle}.json: identity must be exactly "
+            f"{IDENTITY_EMAIL!r} or absent"
+        )
+
+    login = raw.get("github_login", "")
+    if not isinstance(login, str) or (not login and identity != IDENTITY_EMAIL):
         raise ValueError(f"publishers/{handle}.json has no github_login")
 
     keys_raw = raw.get("keys", [])
@@ -111,6 +127,7 @@ def _parse_record(handle: str, raw: object) -> PublisherRecord:
         github_login=login,
         keys=tuple(keys),
         active_keys=active,
+        identity=identity,
     )
 
 

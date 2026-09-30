@@ -46,6 +46,8 @@ from typing import Dict, List, Optional, Tuple
 
 from .digest import DigestEntry, digest_directory
 from .grade import grade_folder
+from .kind_errors import KindRefused
+from .kind_rules import load_folder, validate_folder
 from .minisign_verify import (
     MinisignFormatError,
     PublicKey,
@@ -66,13 +68,31 @@ SKILLS_DIR = "skills"
 #: lists other items by id, version and digest.
 LOADOUTS_DIR = "loadouts"
 
+#: Where theme folders live: ``theme.json`` plus raster images, no code.
+THEMES_DIR = "themes"
+
+#: Where plugin folders live: an allowlist of inert files and one
+#: ``.claude-plugin/plugin.json``, no hooks, servers or scripts.
+PLUGINS_DIR = "plugins"
+
 #: The kinds this catalog publishes. The app refuses anything else, so
 #: writing one would be publishing something nobody can install.
 KIND_SKILL = "skill"
 KIND_LOADOUT = "loadout"
+KIND_THEME = "theme"
+KIND_PLUGIN = "plugin"
 
 #: The folder each kind's items sit under.
-FOLDER_FOR_KIND = {KIND_SKILL: SKILLS_DIR, KIND_LOADOUT: LOADOUTS_DIR}
+FOLDER_FOR_KIND = {
+    KIND_SKILL: SKILLS_DIR,
+    KIND_LOADOUT: LOADOUTS_DIR,
+    KIND_THEME: THEMES_DIR,
+    KIND_PLUGIN: PLUGINS_DIR,
+}
+
+#: The kinds whose folder is held to the shared kind rules (and refused any
+#: script or executable file) at the signed commit.
+RULED_KINDS = (KIND_THEME, KIND_PLUGIN)
 
 #: A version is listed as a script bearer when a member sits under this
 #: folder or carries the owner execute bit. Both are counted because the
@@ -96,7 +116,8 @@ class ReleaseRefused(Exception):
 class VerifiedRelease:
     """One version this job is willing to publish.
 
-    - ``kind``: ``skill`` or ``loadout``, which decides the folder.
+    - ``kind``: ``skill``, ``loadout``, ``theme`` or ``plugin``, which
+      decides the folder.
     - ``handle``, ``name``, ``version``: the identity, all three taken
       from the signed statement rather than from the file's path.
     - ``commit``: the 40 hex commit whose tree was re-digested.
@@ -126,28 +147,31 @@ class VerifiedRelease:
     size: int
     files: int
     scripts: int
-    grade: Dict[str, object]  # empty for a loadout: nothing to grade
+    grade: Dict[str, object]  # skills only: empty for every other kind
 
 
 def kind_of(repo_root: Path, handle: str, name: str) -> str:
-    """Say whether ``<handle>/<name>`` is a skill or a loadout.
+    """Say which kind ``<handle>/<name>`` is, by which folder holds it.
 
-    :returns: ``skill`` or ``loadout``, by which folder holds it in the
-        working tree. Neither defaults to ``skill`` so the existing
-        "folder is not there at that commit" refusal still speaks.
-    :raises ReleaseRefused: when BOTH folders exist, because one item id
-        cannot be two kinds.
+    :returns: ``skill``, ``loadout``, ``theme`` or ``plugin``. None of them
+        defaults to ``skill`` so the existing "folder is not there at that
+        commit" refusal still speaks.
+    :raises ReleaseRefused: when more than one folder exists, because one
+        item id cannot be two kinds.
 
     Example: kind_of(root, "adoom666", "adooms-pack") -> "loadout"
     """
-    is_skill = (repo_root / SKILLS_DIR / handle / name).is_dir()
-    is_loadout = (repo_root / LOADOUTS_DIR / handle / name).is_dir()
-    if is_skill and is_loadout:
+    present = [
+        kind for kind, folder in FOLDER_FOR_KIND.items()
+        if (repo_root / folder / handle / name).is_dir()
+    ]
+    if len(present) > 1:
         raise ReleaseRefused(
-            f"{handle}/{name} exists under both {SKILLS_DIR}/ and "
-            f"{LOADOUTS_DIR}/; an item id is exactly one kind"
+            f"{handle}/{name} exists under more than one of "
+            f"{', '.join(f'{FOLDER_FOR_KIND[k]}/' for k in present)}; an item "
+            f"id is exactly one kind"
         )
-    return KIND_LOADOUT if is_loadout else KIND_SKILL
+    return present[0] if present else KIND_SKILL
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -262,8 +286,28 @@ def _key_for(
     return key
 
 
+def _apply_kind_rules(folder: Path, kind: str, where: str) -> None:
+    """Hold a theme or plugin folder to the shared kind rules.
+
+    :param folder: the checked out folder, named ``<name>``.
+    :param kind: ``theme`` or ``plugin``.
+    :param where: the release file, for the message.
+    :raises ReleaseRefused: when the folder breaks a rule or is not the
+        kind its location says.
+
+    The same rules and codes the hosted submission validator runs, so a
+    folder that could not have come through the front door cannot be
+    signed into the index by hand either.
+    """
+    try:
+        found, _manifest = validate_folder(folder.name, load_folder(folder), kind)
+    except KindRefused as exc:
+        raise ReleaseRefused(f"{where}: {kind} rules: {exc.code}: {exc.detail}") from exc
+    _require(found == kind, f"{where}: the folder is a {found}, not a {kind}")
+
+
 def _checked_out_digest(
-    repo_root: Path, commit: str, relpath: str, where: str, grade: bool = True,
+    repo_root: Path, commit: str, relpath: str, where: str, kind: str = KIND_SKILL,
 ) -> Tuple[str, Tuple[DigestEntry, ...], Dict[str, object]]:
     """Re-digest and grade a skill folder as it stood at one commit.
 
@@ -299,7 +343,9 @@ def _checked_out_digest(
                 f"{where}: {relpath} is not a folder at commit {commit}",
             )
             folder_digest, entries = digest_directory(folder)
-            graded = grade_folder(folder) if grade else {}
+            if kind in RULED_KINDS:
+                _apply_kind_rules(folder, kind, where)
+            graded = grade_folder(folder) if kind == KIND_SKILL else {}
             return folder_digest, entries, graded
         finally:
             subprocess.run(
@@ -417,7 +463,7 @@ def verify_release(
     )
 
     actual_digest, entries, grade = _checked_out_digest(
-        repo_root, commit, skill_path, where, grade=kind == KIND_SKILL,
+        repo_root, commit, skill_path, where, kind=kind,
     )
     _require(
         actual_digest == digest,
@@ -436,8 +482,8 @@ def verify_release(
     )
 
     _require(
-        kind != KIND_LOADOUT or scripts == 0,
-        f"{where}: a loadout carries no scripts, and {skill_path} has {scripts}",
+        kind == KIND_SKILL or scripts == 0,
+        f"{where}: a {kind} carries no scripts, and {skill_path} has {scripts}",
     )
 
     return VerifiedRelease(
