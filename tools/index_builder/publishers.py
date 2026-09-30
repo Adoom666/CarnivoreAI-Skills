@@ -39,13 +39,13 @@ class PublisherRecord:
     """One publisher as the repository declares them.
 
     - ``handle``: the folder name under ``skills/`` and ``releases/``.
-    - ``github_login``: who the handle belongs to, for the index.
+    - ``github_login``: who the handle belongs to, for the index. Empty
+      only when ``identity`` is ``email``.
     - ``keys``: every key as declared, verbatim, for the index document.
     - ``active_keys``: the parsed subset a signature may verify under,
       keyed by key id.
-    - ``identity``: optional marker for a handle that is NOT a GitHub
-      account (an email sign-up), whose ``github_login`` is then the
-      curator's. Empty for a GitHub publisher. Additive: the app ignores
+    - ``identity``: ``email`` for a handle that is NOT a GitHub account (an
+      email sign-up, which carries no ``github_login``), else empty. Additive: the app ignores
       extra publisher keys, so a shipped app is unaffected.
     """
 
@@ -56,8 +56,8 @@ class PublisherRecord:
     identity: str = ""
 
 
-#: The longest identity marker accepted, in characters.
-MAX_IDENTITY_CHARS = 64
+#: The only identity marker accepted: an email sign-up, which has no GitHub login.
+IDENTITY_EMAIL = "email"
 
 
 def _parse_record(handle: str, raw: object) -> PublisherRecord:
@@ -80,18 +80,16 @@ def _parse_record(handle: str, raw: object) -> PublisherRecord:
             f"publishers/{handle}.json declares handle {declared!r}, "
             f"which is not its filename"
         )
-    login = raw.get("github_login")
-    if not isinstance(login, str) or not login:
-        raise ValueError(f"publishers/{handle}.json has no github_login")
-
     identity = raw.get("identity", "")
-    if not isinstance(identity, str) or len(identity) > MAX_IDENTITY_CHARS or (
-        identity != identity.strip() or "\n" in identity or "\r" in identity
-    ):
+    if identity not in ("", IDENTITY_EMAIL):
         raise ValueError(
-            f"publishers/{handle}.json: identity must be a single line of at "
-            f"most {MAX_IDENTITY_CHARS} characters"
+            f"publishers/{handle}.json: identity must be exactly "
+            f"{IDENTITY_EMAIL!r} or absent"
         )
+
+    login = raw.get("github_login", "")
+    if not isinstance(login, str) or (not login and identity != IDENTITY_EMAIL):
+        raise ValueError(f"publishers/{handle}.json has no github_login")
 
     keys_raw = raw.get("keys", [])
     if not isinstance(keys_raw, list):

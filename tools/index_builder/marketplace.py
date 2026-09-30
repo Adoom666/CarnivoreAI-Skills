@@ -182,15 +182,18 @@ def plugin_entry(
             f"there is no publishers/{handle}.json"
         )
 
+    # An email publisher has no GitHub account: credit the handle, no url.
+    author = (
+        {"name": handle}
+        if record.identity == "email"
+        else {"name": record.github_login, "url": _github_url(record.github_login)}
+    )
     return {
         "name": name,
         "source": f"./{SKILLS_DIR}/{handle}/{name}",
         "description": brief,
         "version": latest,
-        "author": {
-            "name": record.github_login,
-            "url": _github_url(record.github_login),
-        },
+        "author": author,
     }
 
 

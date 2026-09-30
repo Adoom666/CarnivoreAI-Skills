@@ -205,3 +205,25 @@ def test_the_identity_marker_is_optional_single_line_and_carried(
     }), encoding="utf-8")
     with pytest.raises(ValueError, match="identity"):
         load_publishers(tmp_path)
+
+
+def test_identity_is_email_or_absent_and_email_needs_no_github_login(
+    tmp_path: Path,
+) -> None:
+    """Email publishers omit github_login; anything else still needs one."""
+    (tmp_path / "publishers").mkdir()
+
+    def write(handle: str, **body: object) -> None:
+        (tmp_path / "publishers" / f"{handle}.json").write_text(
+            json.dumps({"handle": handle, "keys": [], **body}), encoding="utf-8")
+
+    write("mail", identity="email")
+    write("plain", github_login="Adoom666")
+    records = load_publishers(tmp_path)
+    assert records["mail"].github_login == "" and records["mail"].identity == "email"
+    for handle, body in (("nologin", {}), ("odd", {"identity": "<b>x</b>", "github_login": "x"}),
+                         ("other", {"identity": "github", "github_login": "x"})):
+        write(handle, **body)
+        with pytest.raises(ValueError):
+            load_publishers(tmp_path)
+        (tmp_path / "publishers" / f"{handle}.json").unlink()
