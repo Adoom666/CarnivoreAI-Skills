@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Sequence, Set, Tuple
 
-from .releases import LOADOUTS_DIR, RELEASES_DIR, SKILLS_DIR
+from .releases import FOLDER_FOR_KIND, RELEASES_DIR
 
 
 def changed_paths(repo_root: Path, base: str, head: str) -> List[str]:
@@ -52,6 +52,26 @@ def changed_paths(repo_root: Path, base: str, head: str) -> List[str]:
             f"{result.stderr.strip() or 'no stderr'}"
         )
     return sorted(line for line in result.stdout.splitlines() if line.strip())
+
+
+#: Every folder that holds a publishable item: skills, loadouts, themes and
+#: plugins. A change under any of them needs its release.
+ITEM_FOLDERS = tuple(FOLDER_FOR_KIND.values())
+
+
+def _item_of(path: str) -> Tuple[str, str] | None:
+    """Read the (handle, name) of the item folder a path sits in, or None.
+
+    :param path: a repository relative path.
+    :returns: the pair when the path is under any item folder.
+
+    Example: _item_of("themes/a/b/theme.json") -> ("a", "b")
+    """
+    for folder in ITEM_FOLDERS:
+        pair = _skill_of(path, folder)
+        if pair is not None:
+            return pair
+    return None
 
 
 def _skill_of(path: str, folder: str) -> Tuple[str, str] | None:
@@ -85,7 +105,7 @@ def unreleased_changes(changed: Sequence[str]) -> List[Tuple[str, str]]:
     touched_skills: Set[Tuple[str, str]] = set()
     touched_releases: Set[Tuple[str, str]] = set()
     for path in changed:
-        skill = _skill_of(path, SKILLS_DIR) or _skill_of(path, LOADOUTS_DIR)
+        skill = _item_of(path)
         if skill is not None:
             touched_skills.add(skill)
             continue
@@ -109,9 +129,7 @@ def gate_report(changed: Sequence[str]) -> Tuple[bool, List[str]]:
     """
     offenders = unreleased_changes(changed)
     skills_touched = sorted({
-        pair for pair in
-        (_skill_of(path, SKILLS_DIR) or _skill_of(path, LOADOUTS_DIR)
-         for path in changed) if pair is not None
+        pair for pair in (_item_of(path) for path in changed) if pair is not None
     })
     lines = [
         f"paths in this diff: {len(changed)}",
@@ -124,7 +142,7 @@ def gate_report(changed: Sequence[str]) -> Tuple[bool, List[str]]:
         return True, lines
     for handle, name in offenders:
         lines.append(
-            f"REFUSED: this diff changes the {SKILLS_DIR} or {LOADOUTS_DIR} folder "
+            f"REFUSED: this diff changes the {' or '.join(ITEM_FOLDERS)} folder "
             f"{handle}/{name} but no "
             f"file under {RELEASES_DIR}/{handle}/{name}. Sign a release for "
             f"the new content with scripts/catalog-bootstrap/sign_release.py "

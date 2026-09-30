@@ -462,7 +462,7 @@ def test_the_review_subcommand_commits_a_review_bound_to_the_verified_digest(
     root = catalog["root"]
     seen: dict = {}
 
-    def fake_review_one(body: str, settings: object, *, now: str) -> dict:
+    def fake_review_one(body: str, settings: object, *, now: str, **_kw: object) -> dict:
         """Stand in for the model, and remember what it was shown."""
         seen["body"] = body
         return {
@@ -611,7 +611,7 @@ def test_a_published_version_entry_keeps_its_grade_when_the_review_lands(
     write_index(built.document, unsigned)
     assembled_grade = built.document["items"][0]["versions"][0]["grade"]
 
-    def fake_review_one(body: str, settings: object, *, now: str) -> dict:
+    def fake_review_one(body: str, settings: object, *, now: str, **_kw: object) -> dict:
         """Stand in for the model, so this test makes no network call."""
         return {
             "status": "reviewed",

@@ -39,6 +39,10 @@ on:
       # that drops an ownership line has to go red somewhere.
       - CODEOWNERS
       - skills/**
+      # themes and plugins are published items like skills, so a commit
+      # that touches only one has to run the same proof and gate
+      - themes/**
+      - plugins/**
       - releases/**
       # a committed review is published INTO the signed index, so a
       # commit that only adds one has to rebuild it.

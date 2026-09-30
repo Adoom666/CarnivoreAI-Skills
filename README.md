@@ -15,6 +15,8 @@ prove.
 | path | what it holds |
 |---|---|
 | `skills/<handle>/<name>/` | the skill itself, exactly as it gets installed |
+| `themes/<handle>/<name>/` | a theme: `theme.json` plus raster images, no code |
+| `plugins/<handle>/<name>/` | a plugin: inert markdown and one `.claude-plugin/plugin.json`, no hooks, servers or scripts |
 | `releases/<handle>/<name>/<version>.json` | one signed release statement |
 | `revocations/<handle>/*.json` | signed statements withdrawing a key or a version |
 | `publishers/<handle>.json` | which keys a publisher signs with |

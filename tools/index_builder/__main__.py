@@ -575,7 +575,9 @@ def _review_index(args: argparse.Namespace) -> int:
                 members=members,
                 max_chars=settings.max_chars,
             )
-            block = review_one(body, settings, now=now)
+            block = review_one(
+                body, settings, now=now, kind=str(item.get("kind") or "skill"),
+            )
             version["review"] = block
             if block["status"] == "reviewed":
                 counts["model"] += 1
@@ -716,6 +718,15 @@ def _blocked_review_stands(
     return True
 
 
+#: The manifest that names each kind of a folder staged on disk, in the
+#: order they are looked for.
+_STAGED_MANIFESTS = {
+    "skill": "SKILL.md",
+    "theme": "theme.json",
+    "plugin": ".claude-plugin/plugin.json",
+}
+
+
 def _review_one_version(args: argparse.Namespace) -> int:
     """Review ONE version and commit the artifact under ``reviews/``.
 
@@ -775,10 +786,12 @@ def _review_one_version(args: argparse.Namespace) -> int:
 
     if args.staged:
         folder = Path(args.staged).expanduser().resolve()
-        if not (folder / "SKILL.md").is_file():
+        kind = next((k for k, m in _STAGED_MANIFESTS.items()
+                     if (folder / m).is_file()), None)
+        if kind is None:
             print(
-                f"::error::{folder} holds no SKILL.md, so there is no skill "
-                f"there to review",
+                f"::error::{folder} holds no SKILL.md, theme.json or "
+                f".claude-plugin/plugin.json, so there is nothing there to review",
                 file=sys.stderr,
             )
             return 1
@@ -792,6 +805,7 @@ def _review_one_version(args: argparse.Namespace) -> int:
         if release is None:
             return 1
         digest = release.digest
+        kind = release.kind
         skill_path = f"{FOLDER_FOR_KIND[release.kind]}/{handle}/{name}"
         members = _walk_members(root, release.commit, skill_path)
         if not members:
@@ -811,7 +825,7 @@ def _review_one_version(args: argparse.Namespace) -> int:
 
     if _blocked_review_stands(root, handle, name, version, digest, args):
         return 1
-    block = review_one(body, settings, now=_now())
+    block = review_one(body, settings, now=_now(), kind=kind)
     if block.get("status") != "reviewed":
         print(
             f"::error::the review of {handle}/{name} {version} could not be "

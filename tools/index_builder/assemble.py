@@ -37,7 +37,9 @@ from .loadouts import MANIFEST, check_members, parse_loadout
 from .releases import (
     FOLDER_FOR_KIND,
     KIND_LOADOUT,
+    KIND_PLUGIN,
     KIND_SKILL,
+    KIND_THEME,
     SKILLS_DIR,
     _git,
     ReleaseRefused,
@@ -107,6 +109,7 @@ def _publishers_block(
         handle: {
             "github_login": record.github_login,
             "keys": [dict(key) for key in record.keys],
+            **({"identity": record.identity} if record.identity else {}),
         }
         for handle, record in sorted(publishers.items())
     }
@@ -323,6 +326,50 @@ def _loadout_item(
     }
 
 
+#: The manifest each of the two data kinds is carded from.
+_MANIFEST_FOR_KIND = {KIND_THEME: "theme.json", KIND_PLUGIN: ".claude-plugin/plugin.json"}
+
+
+def _manifest_item(
+    repo_root: Path,
+    kind: str,
+    handle: str,
+    name: str,
+    ordered: List[VerifiedRelease],
+    repo_slug: str,
+) -> Dict[str, object]:
+    """Render one theme or plugin item, carded from its manifest.
+
+    The manifest is read at the LATEST version's commit (the bytes its
+    digest covers), never from the working tree. Both manifests were
+    already held to the kind rules when the release verified, so they parse.
+    A theme's card is its ``name`` and ``description``. A plugin's
+    description is optional, so a plugin that declares none is carded as
+    ``<name> plugin`` rather than refused after it was signed. There is no
+    ``fm_keys``, ``cost`` or ``related``: those describe a SKILL.md.
+
+    :raises ReleaseRefused: when the manifest cannot be read as JSON.
+    """
+    latest = ordered[-1]
+    where = f"{FOLDER_FOR_KIND[kind]}/{handle}/{name}/{_MANIFEST_FOR_KIND[kind]}"
+    try:
+        manifest = json.loads(_git(repo_root, "show", f"{latest.commit}:{where}"))
+    except json.JSONDecodeError as exc:
+        raise ReleaseRefused(f"{where}: is not JSON at {latest.commit}: {exc}") from exc
+    description = str(manifest.get("description") or f"{name} plugin")
+    title = str(manifest.get("name") or name) if kind == KIND_THEME else name
+    return {
+        "id": f"{handle}/{name}",
+        "kind": kind,
+        "name": name,
+        "publisher": handle,
+        "latest": latest.version,
+        "card": {"title": title, "brief": brief_of(description)},
+        "fm": {"description": description},
+        "versions": [_version_entry(r, repo_slug, None) for r in ordered],
+    }
+
+
 def assemble(
     repo_root: Path,
     *,
@@ -366,6 +413,11 @@ def assemble(
         if latest.kind == KIND_LOADOUT:
             items.append(_loadout_item(
                 repo_root, handle, name, ordered, repo_slug, indexed))
+            version_count += len(ordered)
+            continue
+        if latest.kind in _MANIFEST_FOR_KIND:
+            items.append(_manifest_item(
+                repo_root, latest.kind, handle, name, ordered, repo_slug))
             version_count += len(ordered)
             continue
         skill_md = repo_root / SKILLS_DIR / handle / name / "SKILL.md"

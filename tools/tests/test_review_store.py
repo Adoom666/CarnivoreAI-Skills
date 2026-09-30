@@ -167,7 +167,7 @@ def counting_model(monkeypatch: pytest.MonkeyPatch) -> List[str]:
     """Answer every model call with a canned block, and record the calls."""
     calls: List[str] = []
 
-    def fake(body: str, settings: object, *, now: str) -> Dict[str, object]:
+    def fake(body: str, settings: object, *, now: str, **_kw: object) -> Dict[str, object]:
         calls.append(body)
         return _block("the model ran.")
 
@@ -540,7 +540,7 @@ def test_the_gate_refuses_a_blocked_version(
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
         cli, "review_one",
-        lambda body, settings, *, now: _blocking_block(), raising=True,
+        lambda body, settings, *, now, **_kw: _blocking_block(), raising=True,
     )
     assert _gate(root, _staged(tmp_path)) == 1
     printed = capsys.readouterr().out
@@ -562,7 +562,7 @@ def test_the_gate_lets_an_overridden_version_through_and_records_who(
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
         cli, "review_one",
-        lambda body, settings, *, now: _blocking_block(), raising=True,
+        lambda body, settings, *, now, **_kw: _blocking_block(), raising=True,
     )
     assert _gate(
         root, _staged(tmp_path), "--override-blocked", "internal tool, on purpose",
@@ -583,7 +583,7 @@ def test_an_override_needs_a_reason(
     root, _commit = _repo(tmp_path)
     monkeypatch.setattr(
         cli, "review_one",
-        lambda body, settings, *, now: _blocking_block(), raising=True,
+        lambda body, settings, *, now, **_kw: _blocking_block(), raising=True,
     )
     assert _gate(root, _staged(tmp_path), "--override-blocked", "   ") == 1
     assert read_review(root, HANDLE, SKILL, VERSION) is None
@@ -601,7 +601,7 @@ def test_an_override_on_a_clean_verdict_is_refused(
     root, _commit = _repo(tmp_path)
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
-        cli, "review_one", lambda body, settings, *, now: _block(), raising=True,
+        cli, "review_one", lambda body, settings, *, now, **_kw: _block(), raising=True,
     )
     assert _gate(root, _staged(tmp_path), "--override-blocked", "why not") == 1
     assert read_review(root, HANDLE, SKILL, VERSION) is None
@@ -623,7 +623,7 @@ def test_the_gate_passes_a_clean_version_and_binds_it_to_the_staged_digest(
     folder = _staged(tmp_path)
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
-        cli, "review_one", lambda body, settings, *, now: _block(), raising=True,
+        cli, "review_one", lambda body, settings, *, now, **_kw: _block(), raising=True,
     )
     assert _gate(root, folder) == 0
     stored = read_review(root, HANDLE, SKILL, VERSION)
@@ -646,7 +646,7 @@ def test_require_clean_refuses_a_flagged_version(
     }
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
-        cli, "review_one", lambda body, settings, *, now: flagged, raising=True,
+        cli, "review_one", lambda body, settings, *, now, **_kw: flagged, raising=True,
     )
     folder = _staged(tmp_path)
     assert _gate(root, folder) == 0, "a flagged version must still publish"
@@ -661,7 +661,7 @@ def test_the_gate_writes_nothing_when_the_scan_fails(
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
         cli, "review_one",
-        lambda body, settings, *, now: {"status": "unavailable"}, raising=True,
+        lambda body, settings, *, now, **_kw: {"status": "unavailable"}, raising=True,
     )
     assert _gate(root, _staged(tmp_path)) == 1
     assert read_review(root, HANDLE, SKILL, VERSION) is None
@@ -679,7 +679,7 @@ def test_the_gate_reads_every_file_in_the_staged_folder(
     )
     seen: Dict[str, str] = {}
 
-    def capture(body: str, settings: object, *, now: str) -> Dict[str, object]:
+    def capture(body: str, settings: object, *, now: str, **_kw: object) -> Dict[str, object]:
         seen["body"] = body
         return _block()
 
@@ -698,14 +698,14 @@ def test_a_committed_blocked_review_is_not_overwritten_without_the_flag(
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
         cli, "review_one",
-        lambda body, settings, *, now: _blocking_block(), raising=True,
+        lambda body, settings, *, now, **_kw: _blocking_block(), raising=True,
     )
     folder = _staged(tmp_path)
     assert _gate(root, folder) == 1
     first = read_review(root, HANDLE, SKILL, VERSION)
     assert first is not None and first.block["verdict"] == "blocked"
 
-    def clean(body: str, settings: object, *, now: str) -> Dict[str, object]:
+    def clean(body: str, settings: object, *, now: str, **_kw: object) -> Dict[str, object]:
         return {"status": "reviewed", "verdict": "clean", "summary": "ok",
                 "warnings": [], "model": "m", "reviewed_at": now}
 
@@ -729,14 +729,14 @@ def test_a_blocked_digest_sticks_under_a_new_version_and_a_new_name(
     monkeypatch.setenv("OPENROUTER_SECRET_VALUE", "sk-test")
     monkeypatch.setattr(
         cli, "review_one",
-        lambda body, settings, *, now: _blocking_block(), raising=True,
+        lambda body, settings, *, now, **_kw: _blocking_block(), raising=True,
     )
     folder = _staged(tmp_path)
     assert _gate(root, folder) == 1
 
     calls: list = []
 
-    def clean(body: str, settings: object, *, now: str) -> Dict[str, object]:
+    def clean(body: str, settings: object, *, now: str, **_kw: object) -> Dict[str, object]:
         calls.append(1)
         return {"status": "reviewed", "verdict": "clean", "summary": "ok",
                 "warnings": [], "model": "m", "reviewed_at": now}

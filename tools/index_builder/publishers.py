@@ -43,12 +43,21 @@ class PublisherRecord:
     - ``keys``: every key as declared, verbatim, for the index document.
     - ``active_keys``: the parsed subset a signature may verify under,
       keyed by key id.
+    - ``identity``: optional marker for a handle that is NOT a GitHub
+      account (an email sign-up), whose ``github_login`` is then the
+      curator's. Empty for a GitHub publisher. Additive: the app ignores
+      extra publisher keys, so a shipped app is unaffected.
     """
 
     handle: str
     github_login: str
     keys: Tuple[Dict[str, str], ...]
     active_keys: Dict[str, PublicKey]
+    identity: str = ""
+
+
+#: The longest identity marker accepted, in characters.
+MAX_IDENTITY_CHARS = 64
 
 
 def _parse_record(handle: str, raw: object) -> PublisherRecord:
@@ -74,6 +83,15 @@ def _parse_record(handle: str, raw: object) -> PublisherRecord:
     login = raw.get("github_login")
     if not isinstance(login, str) or not login:
         raise ValueError(f"publishers/{handle}.json has no github_login")
+
+    identity = raw.get("identity", "")
+    if not isinstance(identity, str) or len(identity) > MAX_IDENTITY_CHARS or (
+        identity != identity.strip() or "\n" in identity or "\r" in identity
+    ):
+        raise ValueError(
+            f"publishers/{handle}.json: identity must be a single line of at "
+            f"most {MAX_IDENTITY_CHARS} characters"
+        )
 
     keys_raw = raw.get("keys", [])
     if not isinstance(keys_raw, list):
@@ -111,6 +129,7 @@ def _parse_record(handle: str, raw: object) -> PublisherRecord:
         github_login=login,
         keys=tuple(keys),
         active_keys=active,
+        identity=identity,
     )
 
 
