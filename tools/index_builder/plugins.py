@@ -30,6 +30,7 @@ import json
 import re
 from typing import Dict, List
 
+from .content_rules import FORBIDDEN_NAMES, FORBIDDEN_SEGMENTS, content_problem
 from .kind_errors import KindRefused
 
 MANIFEST = ".claude-plugin/plugin.json"
@@ -39,22 +40,8 @@ MAX_LISTED = 10
 MANIFEST_KEYS = frozenset(
     {"name", "version", "description", "author", "homepage", "repository", "license", "keywords"}
 )
-#: Path segments that run or configure code, at any depth.
-FORBIDDEN_SEGMENTS = frozenset(
-    {"hooks", "bin", "monitors", "scripts", ".claude", "node_modules"}
-)
-FORBIDDEN_NAMES = re.compile(
-    r"^(?:\.mcp\.json|\.lsp\.json|settings(?:\.local)?\.json|hooks\.json)$", re.IGNORECASE
-)
 TEXT_REFERENCE_EXTENSIONS = (".md", ".txt", ".json", ".yaml", ".yml")
 _ROOT_DOC_RE = re.compile(r"^(?:readme|license)(?:\.md|\.txt)?$", re.IGNORECASE)
-_FORBIDDEN_FRONT_RE = re.compile(
-    r"""^\s*["']?(allowed-tools|permissionMode|hooks|mcpServers)["']?\s*:""",
-    re.IGNORECASE | re.MULTILINE,
-)
-#: The inline shell injection form (a bang then a backtick) and the fenced
-#: bang block.
-_SHELL_RE = re.compile(r"!`|^\s*```!", re.MULTILINE)
 
 
 def _refuse(code: str, detail: str) -> None:
@@ -88,36 +75,6 @@ def _path_allowed(path: str) -> bool:
     if parts[0] == "skills" and len(parts) >= 3:
         return lower.endswith(TEXT_REFERENCE_EXTENSIONS)
     return False
-
-
-def _content_problem(path: str, data: bytes) -> str:
-    """Name what is wrong with a file's bytes, or return an empty string.
-
-    Description: non UTF-8, a shebang, and for markdown the forbidden front
-      matter keys and the inline shell marker. The front matter scan reads
-      every line of a leading ``---`` block, or the whole file when the
-      fence never closes, so an unusual layout cannot hide a key.
-    Inputs: path (str); data (bytes).
-    Output: str reason, empty when the file is clean.
-    Example: _content_problem("a.md", b"#!/bin/sh") -> "shebang"
-    """
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return "not utf-8"
-    text = text.lstrip("﻿")
-    if text.startswith("#!"):
-        return "shebang"
-    if path.lower().endswith(".md"):
-        if text.startswith("---"):
-            end = re.search(r"^---[^\S\n]*$", text[3:], re.MULTILINE)
-            block = text[: end.end() + 3] if end else text
-            found = _FORBIDDEN_FRONT_RE.search(block)
-            if found:
-                return f"front matter key {found.group(1)}"
-        if _SHELL_RE.search(text):
-            return "inline shell injection"
-    return ""
 
 
 def _manifest_problems(name: str, raw: bytes) -> List[str]:
@@ -168,7 +125,7 @@ def validate_plugin(name: str, members: Dict[str, bytes]) -> str:
         if not _path_allowed(path):
             problems.append(f"{path} (path not allowed)")
         elif path != MANIFEST:
-            reason = _content_problem(path, data)
+            reason = content_problem(path, data)
             if reason:
                 problems.append(f"{path} ({reason})")
     if problems:

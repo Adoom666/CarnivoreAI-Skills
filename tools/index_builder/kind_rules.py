@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
 from . import plugins, themes
+from .content_rules import FORBIDDEN_NAMES, FORBIDDEN_SEGMENTS, content_problem
 from .kind_errors import MAX_DESCRIPTION_CHARS, KindRefused
 from .statements import SKILL_NAME_RE
 
@@ -142,7 +143,7 @@ RESERVED_NAMES = {KIND_SKILL: RESERVED_SKILL_NAMES, KIND_THEME: BUNDLED_THEME_ID
 def detect_kind(paths: Iterable[str], declared: Any = None) -> str:
     """Name the kind of a file list by which manifest it carries.
 
-    Description: exact path match only, so it can run before any bytes are
+    Description: case-insensitive path match only, so it can run before any bytes are
       read. Exactly one manifest must be present; a declared kind must
       agree.
     Inputs: paths (iterable of str); declared (Any) an optional kind the
@@ -154,10 +155,10 @@ def detect_kind(paths: Iterable[str], declared: Any = None) -> str:
     """
     if declared is not None and declared not in KIND_LIMITS:
         raise KindRefused(400, "kind_not_supported", "this catalog publishes skills, themes and plugins")
-    found = set(paths)
+    found = {p.lower() for p in paths}
     if LOADOUT_MANIFEST in found:
         raise KindRefused(400, "kind_not_supported", "this catalog does not publish loadouts")
-    kinds = sorted(MANIFEST_KINDS[m] for m in MANIFEST_KINDS if m in found)
+    kinds = sorted(MANIFEST_KINDS[m] for m in MANIFEST_KINDS if m.lower() in found)
     if not kinds:
         raise KindRefused(400, "submission_invalid", "the folder carries no SKILL.md, theme.json or .claude-plugin/plugin.json")
     if len(kinds) > 1:
@@ -227,6 +228,31 @@ def frontmatter(text: str) -> Dict[str, str]:
     return fields
 
 
+#: A skill folder installs into the same directory a plugin does, so a
+#: plugin manifest inside one would make Claude Code load it as a plugin.
+_SKILL_FORBIDDEN_SEGMENTS = (FORBIDDEN_SEGMENTS - {"scripts"}) | {".claude-plugin"}
+
+
+def _check_skill_inert(members: Dict[str, bytes]) -> None:
+    """Refuse a skill that can run code without a per-use decision.
+
+    Inputs: members (dict) path to bytes.
+    Raises: KindRefused 409 skill_not_safe listing up to ten paths.
+    Example: _check_skill_inert({"SKILL.md": b"!`ls`"})
+    """
+    problems = []
+    for path, data in members.items():
+        parts = path.split("/")
+        if any(p.lower() in _SKILL_FORBIDDEN_SEGMENTS for p in parts) or FORBIDDEN_NAMES.match(parts[-1]):
+            problems.append(f"{path} (path not allowed)")
+        elif path.lower().endswith(".md"):
+            reason = content_problem(path, data)
+            if reason:
+                problems.append(f"{path} ({reason})")
+    if problems:
+        raise KindRefused(409, "skill_not_safe", "a skill may not carry: " + "; ".join(problems[:10]))
+
+
 def _validate_skill(name: str, members: Dict[str, bytes]) -> str:
     """Skill rules: no scripts, one root SKILL.md whose front matter agrees.
 
@@ -237,6 +263,7 @@ def _validate_skill(name: str, members: Dict[str, bytes]) -> str:
     """
     if any(path.split("/", 1)[0] == "scripts" for path in members):
         raise KindRefused(409, "scripts_not_supported", "this catalog does not publish executable content")
+    _check_skill_inert(members)
     nested = [p for p in members if p.endswith("/" + SKILL_MANIFEST)]
     if nested:
         raise KindRefused(400, "submission_invalid", f"{SKILL_MANIFEST} must be at the folder root, found {nested[0]!r}")
