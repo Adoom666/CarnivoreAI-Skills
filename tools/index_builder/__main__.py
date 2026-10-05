@@ -86,6 +86,8 @@ from .review_store import (
     review_path,
     write_review,
 )
+from .media import MediaInvalid, stage_media
+from .releases import FOLDER_FOR_KIND
 from .serial import SerialRefused, decide_serial, decision_lines
 from .sign import SigningFailed, SigningSkipped, sign_index
 
@@ -1158,6 +1160,24 @@ def _walk_members(root: Path, commit: str, skill_path: str) -> List[tuple]:
     return members
 
 
+def cmd_stage_media(args: argparse.Namespace) -> int:
+    """Copy every image the index cards to ``<out>/<sha256>.webp``.
+
+    :param args: the parsed command line.
+    :returns: 0 on success, 1 when a carded image cannot be staged, because a
+        sha256 signed into the index with no file behind it must never deploy.
+    """
+    root = Path(args.repo_root).resolve()
+    document = json.loads(Path(args.index).read_text(encoding="utf-8"))
+    try:
+        count = stage_media(root, FOLDER_FOR_KIND, document, Path(args.out))
+    except MediaInvalid as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
+    print(f"staged {count} media file(s) into {args.out}")
+    return 0
+
+
 def cmd_sign(args: argparse.Namespace) -> int:
     """Sign the index, or skip loudly when there is no key.
 
@@ -1309,6 +1329,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="write somewhere other than the repository root, for tests",
     )
     shelf.set_defaults(handler=cmd_marketplace)
+
+    pics = sub.add_parser(
+        "stage-media", help="copy each carded image to <out>/<sha256>.webp",
+    )
+    pics.add_argument("--index", required=True)
+    pics.add_argument("--out", required=True)
+    pics.set_defaults(handler=cmd_stage_media)
 
     stamp = sub.add_parser("sign", help="sign the index, or skip when there is no key")
     stamp.add_argument("--index", required=True)

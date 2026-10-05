@@ -35,6 +35,10 @@
 # serves javascript is not a guess worth making. The deploy job's own
 # header assertion is what MEASURES which headers actually landed, and it
 # prints the whole set.
+# /v1/media/* IS NAMED BY CONTENT: every file is <sha256>.webp, so its bytes
+# can never change under its url and a year of immutable caching is correct.
+# it is listed after /v1/* and carries its own nosniff for the same reason
+# /admin/* does: how amplify combines two matching patterns is not guessed at.
 customHeaders:
   - pattern: /admin/*
     headers:
@@ -52,6 +56,14 @@ customHeaders:
     headers:
       - key: Cache-Control
         value: public, max-age=300, must-revalidate
+      - key: X-Content-Type-Options
+        value: nosniff
+  - pattern: /v1/media/*
+    headers:
+      - key: Cache-Control
+        value: public, max-age=31536000, immutable
+      - key: Content-Type
+        value: image/webp
       - key: X-Content-Type-Options
         value: nosniff
   - pattern: '**'
