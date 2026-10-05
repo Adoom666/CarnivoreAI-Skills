@@ -21,16 +21,21 @@ WHAT THE BUILD REFUSES. Every file is checked here, in the job that has no
 secrets, and an image that fails is DROPPED from its card with a notice while
 the item still publishes: a cosmetic problem must never block a release, and
 must never put bytes in the index that nothing stands behind. Checked: the
-RIFF/WEBP envelope with a size that matches the file, only the chunks that
-paint pixels (no EXIF, XMP, ICC or animation), real dimensions inside the
+RIFF/WEBP envelope with a size that matches the file, exactly one lossy VP8
+chunk and nothing else (no VP8X, VP8L, ALPH, EXIF, XMP, ICC or animation: the
+generator emits only that shape, so a lossless or extended file is refused),
+a well formed keyframe header, real dimensions inside the
 window, a byte cap, and a ``media.json`` whose sha256, size, dimensions and
 item id all match the bytes. Shipped bytes are the publisher tool's own
 encoder output; this check is the second lock on that door, so it reads the
 container itself and trusts no field a file declares about itself.
 
-THIS READER USES NO IMAGE LIBRARY. A codec is the attack surface of this class
-of bug; the builder only needs the container, the chunk list and the canvas
-size, all of which are a few fixed bytes.
+THIS READER USES NO IMAGE LIBRARY, ON PURPOSE: the verify job has no Pillow and
+a codec is the attack surface of this class of bug. Accepting only the one
+exact shape is what removes the room for a crafted canvas, a second frame or a
+payload tucked after the image data. Bitstream bytes inside the one VP8 chunk
+are the generator's own encoder output; a hand-committed file is code-owner
+reviewed.
 """
 
 from __future__ import annotations
@@ -68,13 +73,6 @@ MAX_SIDE = 4096
 MIN_RATIO = 1.2
 MAX_RATIO = 3.2
 
-#: Chunks that paint pixels. Everything else (EXIF, XMP, ICCP, ANIM, ANMF and
-#: anything unknown) refuses the file.
-_PIXEL_CHUNKS = (b"VP8 ", b"VP8L", b"VP8X", b"ALPH")
-
-#: VP8X flag bits that declare ICC, EXIF, XMP or animation.
-_VP8X_REFUSED_FLAGS = 0x20 | 0x08 | 0x04 | 0x02
-
 
 class MediaInvalid(Exception):
     """An image or its record failed a check, carrying why for the job log."""
@@ -100,60 +98,46 @@ def media_dir(root: Path, folder: str, item_id: str) -> Path:
 
 
 def webp_size(data: bytes) -> Tuple[int, int]:
-    """Read a WebP's pixel size, refusing anything but a plain still image.
+    """Read a WebP's pixel size, accepting ONLY the shape the generator emits.
+
+    That shape is one RIFF/WEBP file holding exactly one lossy ``VP8 `` chunk:
+    no VP8X, VP8L, ALPH, ANIM, ANMF, metadata or trailing chunk. The RIFF size
+    equals the file length, the chunk fills the file, and the VP8 keyframe
+    header is well formed. The size comes from that one header, so there is no
+    separate canvas that could disagree with a frame.
 
     :param data: the whole file.
     :returns: (width, height).
-    :raises MediaInvalid: on a bad envelope, a size mismatch, a metadata or
-        animation chunk, an unknown chunk, or dimensions it cannot read.
+    :raises MediaInvalid: on anything else.
 
     Example: webp_size(open("hero.webp", "rb").read()) -> (1536, 1024)
     """
-    if len(data) < 20 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+    if len(data) < 30 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
         raise MediaInvalid("not a RIFF/WEBP file")
     if struct.unpack("<I", data[4:8])[0] != len(data) - 8:
         raise MediaInvalid("the RIFF size does not match the file, so bytes are appended or cut")
-    pos = 12
-    size: Optional[Tuple[int, int]] = None
-    seen_pixels = False
-    while pos < len(data):
-        if pos + 8 > len(data):
-            raise MediaInvalid("a chunk header runs past the end of the file")
-        tag = data[pos:pos + 4]
-        length = struct.unpack("<I", data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + length]
-        if len(body) != length:
-            raise MediaInvalid(f"chunk {tag!r} runs past the end of the file")
-        if tag not in _PIXEL_CHUNKS:
-            raise MediaInvalid(
-                f"chunk {tag!r} is not allowed (no EXIF, XMP, ICC, animation or unknown chunks)")
-        if tag == b"VP8X":
-            if length != 10 or pos != 12:
-                raise MediaInvalid("malformed VP8X chunk")
-            if body[0] & _VP8X_REFUSED_FLAGS:
-                raise MediaInvalid("VP8X declares metadata or animation")
-            size = (
-                int.from_bytes(body[4:7], "little") + 1,
-                int.from_bytes(body[7:10], "little") + 1,
-            )
-        elif tag == b"VP8 ":
-            if length < 10 or body[3:6] != b"\x9d\x01\x2a":
-                raise MediaInvalid("malformed VP8 frame header")
-            w, h = struct.unpack("<HH", body[6:10])
-            if size is None:
-                size = (w & 0x3FFF, h & 0x3FFF)
-            seen_pixels = True
-        elif tag == b"VP8L":
-            if length < 5 or body[0] != 0x2F:
-                raise MediaInvalid("malformed VP8L header")
-            bits = struct.unpack("<I", body[1:5])[0]
-            if size is None:
-                size = ((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
-            seen_pixels = True
-        pos += 8 + length + (length & 1)
-    if pos != len(data) or not seen_pixels or size is None:
-        raise MediaInvalid("no image data, or trailing bytes after the last chunk")
-    return size
+    tag, length = data[12:16], struct.unpack("<I", data[16:20])[0]
+    if tag != b"VP8 ":
+        raise MediaInvalid(
+            f"first chunk {tag!r} is not allowed: only one lossy 'VP8 ' chunk is accepted")
+    if 20 + length + (length & 1) != len(data):
+        raise MediaInvalid("the VP8 chunk must be the only chunk and fill the file")
+    body = data[20:20 + length]
+    if length & 1 and data[-1] != 0:
+        raise MediaInvalid("the VP8 chunk padding byte is not zero")
+    if length < 10:
+        raise MediaInvalid("malformed VP8 frame header")
+    tag24 = body[0] | (body[1] << 8) | (body[2] << 16)
+    if tag24 & 1 or (tag24 >> 1) & 7 > 3 or not (tag24 >> 4) & 1:
+        raise MediaInvalid("the VP8 frame is not a shown keyframe")
+    if (tag24 >> 5) > length - 10:
+        raise MediaInvalid("the VP8 first partition runs past the chunk")
+    if body[3:6] != b"\x9d\x01\x2a":
+        raise MediaInvalid("malformed VP8 start code")
+    w, h = struct.unpack("<HH", body[6:10])
+    if w >> 14 or h >> 14:
+        raise MediaInvalid("the VP8 frame declares scaling")
+    return w & 0x3FFF, h & 0x3FFF
 
 
 def check_hero(data: bytes) -> Tuple[int, int]:

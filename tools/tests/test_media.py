@@ -1,7 +1,7 @@
 """Hero images: the builder drops a bad one, accepts a clean one, deploys by sha256.
 
 The WebP files are built by hand, container only. The builder never decodes
-pixels, so a container with a valid VP8L header is exactly what it sees.
+pixels, so a container with a valid VP8 keyframe header is exactly what it sees.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ def _chunk(tag: bytes, body: bytes) -> bytes:
 
 
 def _webp(w: int = 1536, h: int = 1024, extra: bytes = b"") -> bytes:
-    bits = (w - 1) | ((h - 1) << 14)
-    body = b"WEBP" + _chunk(b"VP8L", b"\x2f" + struct.pack("<I", bits) + b"\0" * 8) + extra
+    vp8 = b"\x10\x00\x00" + b"\x9d\x01\x2a" + struct.pack("<HH", w, h) + b"\0" * 8
+    body = b"WEBP" + _chunk(b"VP8 ", vp8) + extra
     return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
@@ -62,7 +62,7 @@ def test_a_clean_hero_is_carded_and_staged_by_sha256(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("extra", [b"EXIF", b"XMP ", b"ICCP"])
 def test_a_hero_with_a_metadata_chunk_is_refused(extra: bytes) -> None:
-    with pytest.raises(MediaInvalid, match="not allowed"):
+    with pytest.raises(MediaInvalid, match="only chunk"):
         check_hero(_webp(extra=_chunk(extra, b"secret!!")))
 
 
