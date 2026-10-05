@@ -47,6 +47,10 @@ on:
       # a committed review is published INTO the signed index, so a
       # commit that only adds one has to rebuild it.
       - reviews/**
+      # a hero image is signed into the index by its sha256 and deployed
+      # to /v1/media/, so a commit that only adds or swaps one has to run
+      # the build. a path missing here is a change that never deploys.
+      - media/**
       - publishers/**
       - revocations/**
       - catalog.yml
@@ -359,6 +363,14 @@ jobs:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: set up python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: install the builder's dependencies
+        run: python -m pip install -r tools/requirements.txt
+
       - name: take the signed index
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -376,6 +388,12 @@ jobs:
           mkdir -p deploy/v1
           cp signed/index.json deploy/v1/index.json
           cp signed/index.json.minisig deploy/v1/index.json.minisig
+          # hero images, named by sha256. the builder refuses to stage a
+          # carded image whose bytes do not hash to the sha256 the signed
+          # index names, so a dangling sha256 can never be deployed.
+          (cd tools && python -m index_builder --repo-root "$GITHUB_WORKSPACE" \
+            stage-media --index "$GITHUB_WORKSPACE/signed/index.json" \
+            --out "$GITHUB_WORKSPACE/deploy/v1/media")
           cp site/customHttp.yml deploy/customHttp.yml
           cp site/index.html deploy/index.html
           # THE ADMIN PAGE RIDES IN THIS SAME ZIP, and that is the whole

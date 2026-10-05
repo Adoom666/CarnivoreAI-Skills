@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from .frontmatter import brief_of, card_and_fm, extras_of, parse_front_matter
 from .minisign_verify import MinisignFormatError, parse_signature, verify
 from .publishers import PublisherRecord
+from .media import attach_media
 from .loadouts import MANIFEST, check_members, parse_loadout
 from .releases import (
     FOLDER_FOR_KIND,
@@ -370,6 +371,14 @@ def _manifest_item(
     }
 
 
+def _media_notice(message: str) -> None:
+    """Print one media line as a job-log notice.
+
+    :param message: what happened.
+    """
+    print(f"::notice::{message}")
+
+
 def assemble(
     repo_root: Path,
     *,
@@ -444,6 +453,10 @@ def assemble(
             **extras_of(front),
         })
         version_count += len(ordered)
+
+    # a hero image is cosmetic: an item whose media fails a check publishes
+    # without it, and the line says which and why.
+    attach_media(repo_root, FOLDER_FOR_KIND, items, _media_notice)
 
     stamp = generated_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     document: Dict[str, object] = {
