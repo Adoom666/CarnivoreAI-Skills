@@ -1,0 +1,18 @@
+{
+  "schema": "carnivore.catalog.media/1",
+  "item": "adoom666/make-readme",
+  "source": "generated",
+  "sha256": "b1877fb8a706b43352284f5f8c7ec985afa6af03f960f23f03f5dd0602bbfc26",
+  "w": 1536,
+  "h": 1024,
+  "bytes": 129686,
+  "created_at": "2026-10-05T06:02:31+00:00",
+  "generator": {
+    "model": "openai/gpt-image-2",
+    "prompt_version": 1,
+    "concept": {
+      "object": "an intricately woven tapestry of code",
+      "mood": "intricate, organized, creative, insightful"
+    }
+  }
+}

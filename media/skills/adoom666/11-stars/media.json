@@ -1,0 +1,18 @@
+{
+  "schema": "carnivore.catalog.media/1",
+  "item": "adoom666/11-stars",
+  "source": "generated",
+  "sha256": "7e1f5f566e659f4d8aff8c6b050e1617920361be829fe96ec2d65e648e9822d0",
+  "w": 1536,
+  "h": 1024,
+  "bytes": 56748,
+  "created_at": "2026-10-05T06:01:30+00:00",
+  "generator": {
+    "model": "openai/gpt-image-2",
+    "prompt_version": 1,
+    "concept": {
+      "object": "a constellation of radiant stars",
+      "mood": "mysterious and inspiring"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "schema": "carnivore.catalog.media/1",
+  "item": "adoom666/devils-advocate",
+  "source": "generated",
+  "sha256": "1dfaa1aefe9edcd1a2f2a40e82918c134211726f345e8df37a627c0fe68da6e8",
+  "w": 1536,
+  "h": 1024,
+  "bytes": 52714,
+  "created_at": "2026-10-05T06:04:45+00:00",
+  "generator": {
+    "model": "openai/gpt-image-2",
+    "prompt_version": 1,
+    "concept": {
+      "object": "a chessboard with mismatched pieces",
+      "mood": "strategic, contemplative, challenging"
+    }
+  }
+}
