@@ -1,0 +1,13 @@
+# DIRECT dependencies only. The installed set is tools/requirements.txt, a
+# hash-locked file generated from this one; workflows install it with
+# `pip install --require-hashes --no-deps`, so a changed or unlisted package fails.
+# cryptography is the same version the product repo pins, so the two verifiers
+# are the same code on the same library.
+#
+# Regenerate (Python 3.12, the version the workflows use):
+#   python3.12 -m venv /tmp/lockvenv && /tmp/lockvenv/bin/pip install pip-tools
+#   /tmp/lockvenv/bin/pip-compile --generate-hashes --strip-extras --allow-unsafe \
+#       --output-file tools/requirements.txt tools/requirements.in
+cryptography==48.0.0
+PyYAML==6.0.3
+pytest==8.4.2

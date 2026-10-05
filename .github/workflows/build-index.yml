@@ -124,7 +124,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: install the builder's dependencies
-        run: python -m pip install -r tools/requirements.txt
+        run: python -m pip install --require-hashes --no-deps -r tools/requirements.txt
 
       - name: prove the digest implementation against the shared vectors
         # the product repo runs the same vectors against its own digest code.
@@ -239,7 +239,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: install the builder's dependencies
-        run: python -m pip install -r tools/requirements.txt
+        run: python -m pip install --require-hashes --no-deps -r tools/requirements.txt
 
       - name: take the unsigned index
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -304,7 +304,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: install the builder's dependencies
-        run: python -m pip install -r tools/requirements.txt
+        run: python -m pip install --require-hashes --no-deps -r tools/requirements.txt
 
       - name: install minisign
         run: |
@@ -369,7 +369,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: install the builder's dependencies
-        run: python -m pip install -r tools/requirements.txt
+        run: python -m pip install --require-hashes --no-deps -r tools/requirements.txt
 
       - name: take the signed index
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
