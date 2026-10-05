@@ -1,0 +1,18 @@
+{
+  "schema": "carnivore.catalog.media/1",
+  "item": "adoom666/scrooge",
+  "source": "generated",
+  "sha256": "dc5ea6c3f5c1d2925c77a3f2eaf66391345f2590663f3323fd5fc81359cb4e75",
+  "w": 1536,
+  "h": 1024,
+  "bytes": 49688,
+  "created_at": "2026-10-05T06:03:31+00:00",
+  "generator": {
+    "model": "openai/gpt-image-2",
+    "prompt_version": 1,
+    "concept": {
+      "object": "an empty hourglass",
+      "mood": "reflective, insightful, transformative, efficient"
+    }
+  }
+}
